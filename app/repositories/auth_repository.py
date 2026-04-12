@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from app.core.database import Database
@@ -75,3 +76,27 @@ class AuthRepository:
                 """,
                 (user_id,),
             )
+
+    def update_user_credentials(
+        self,
+        *,
+        user_id: int,
+        username: str,
+        password_hash: str,
+        password_salt: str,
+    ) -> None:
+        with self._database.connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    UPDATE users
+                    SET username = ?,
+                        password_hash = ?,
+                        password_salt = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (username, password_hash, password_salt, user_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("Логин уже используется другим пользователем.") from exc

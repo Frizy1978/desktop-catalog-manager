@@ -6,6 +6,8 @@ Requires-Python: >=3.12
 Description-Content-Type: text/markdown
 Requires-Dist: PySide6<7.0,>=6.8
 Requires-Dist: qtawesome<2.0,>=1.4
+Requires-Dist: SQLAlchemy<3.0,>=2.0
+Requires-Dist: requests<3.0,>=2.31
 Provides-Extra: dev
 Requires-Dist: pytest<9.0,>=8.0; extra == "dev"
 
@@ -21,6 +23,7 @@ This repository currently contains **Phase 1 (foundation)**:
 - single main window skeleton
 - categories panel + toolbar + products table scaffolds
 - placeholder dialogs and module packages for next phases
+- Phase 2 foundation: SQLAlchemy models/repositories and initial WooCommerce import pipeline
 
 ## Tech Stack
 - Python 3.12+
@@ -56,6 +59,9 @@ Implemented:
 - local auth foundation (password hash + login flow)
 - SQLite schema foundation
 - UI skeleton required by Phase 1
+- SQLAlchemy data layer for catalog entities
+- WooCommerce client and initial categories/products import
+- sync run operation log foundation (`sync_runs`)
 
 Not implemented yet:
 - full WooCommerce sync
@@ -64,6 +70,16 @@ Not implemented yet:
 - Yandex integration
 - full bulk editing logic
 - buyer flows, Telegram, orders
+
+## WooCommerce Import Setup (.env)
+Set these values to enable the `Импорт` action:
+```ini
+FISHOLHA_WC_BASE_URL=https://example.com
+FISHOLHA_WC_CONSUMER_KEY=ck_xxx
+FISHOLHA_WC_CONSUMER_SECRET=cs_xxx
+FISHOLHA_WC_TIMEOUT_SECONDS=20
+FISHOLHA_WC_VERIFY_SSL=true
+```
 
 ## Project Layout
 See `docs/architecture.md` for architecture and module boundaries.

@@ -51,3 +51,23 @@ class AuthService:
             username=str(credentials["username"]),
             role=str(credentials["role_name"]),
         )
+
+    def update_user_credentials(
+        self,
+        *,
+        user_id: int,
+        username: str,
+        password: str,
+    ) -> None:
+        if not username.strip():
+            raise ValueError("Логин не может быть пустым.")
+        if not password:
+            raise ValueError("Пароль не может быть пустым.")
+
+        salt_hex, hash_hex = hash_password(password)
+        self._auth_repository.update_user_credentials(
+            user_id=user_id,
+            username=username.strip(),
+            password_hash=hash_hex,
+            password_salt=salt_hex,
+        )

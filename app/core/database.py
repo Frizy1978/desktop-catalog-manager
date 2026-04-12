@@ -84,11 +84,16 @@ CREATE TABLE IF NOT EXISTS product_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL,
     original_path TEXT NOT NULL,
+    local_path TEXT,
     is_primary INTEGER NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_product_primary_image
+ON product_images(product_id)
+WHERE is_primary = 1;
 
 CREATE TABLE IF NOT EXISTS product_image_versions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

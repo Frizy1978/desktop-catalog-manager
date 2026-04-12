@@ -12,5 +12,5 @@ class CatalogService:
     def get_category_sidebar_items(self) -> list[dict]:
         return self._repository.list_categories_for_sidebar()
 
-    def get_products_table_rows(self) -> list[dict]:
-        return self._repository.list_products_for_table()
+    def get_products_table_page(self, page: int, page_size: int) -> dict:
+        return self._repository.list_products_for_table(page=page, page_size=page_size)

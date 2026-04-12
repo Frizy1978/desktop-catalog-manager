@@ -1,42 +1,43 @@
 from __future__ import annotations
 
-from app.core.database import Database
+import math
+
+from app.db.session import SqlAlchemyDatabase
+from app.repositories.category_repository import CategoryRepository
+from app.repositories.product_repository import ProductRepository
 
 
 class CatalogRepository:
-    """Phase 1 placeholder repository for category/product read models."""
+    """Phase 2 repository facade for catalog read models."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: SqlAlchemyDatabase) -> None:
         self._database = database
+        self._category_repository = CategoryRepository()
+        self._product_repository = ProductRepository()
 
     def list_categories_for_sidebar(self) -> list[dict]:
-        with self._database.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, name, sync_status
-                FROM categories
-                WHERE is_archived = 0
-                ORDER BY name COLLATE NOCASE
-                """
-            ).fetchall()
-            return [dict(row) for row in rows]
+        with self._database.session_scope() as session:
+            return self._category_repository.list_categories_for_sidebar(session)
 
-    def list_products_for_table(self) -> list[dict]:
-        with self._database.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    products.id,
-                    products.name,
-                    products.sku,
-                    products.price,
-                    products.price_unit,
-                    products.sync_status,
-                    products.updated_at,
-                    products.published_state
-                FROM products
-                WHERE products.is_archived = 0
-                ORDER BY products.updated_at DESC
-                """
-            ).fetchall()
-            return [dict(row) for row in rows]
+    def list_products_for_table(
+        self,
+        *,
+        page: int,
+        page_size: int,
+    ) -> dict:
+        with self._database.session_scope() as session:
+            items, total_items = self._product_repository.list_products_for_table(
+                session,
+                page=page,
+                page_size=page_size,
+            )
+            safe_page_size = max(1, page_size)
+            total_pages = max(1, math.ceil(total_items / safe_page_size))
+            safe_page = min(max(1, page), total_pages)
+            return {
+                "items": items,
+                "page": safe_page,
+                "page_size": safe_page_size,
+                "total_items": total_items,
+                "total_pages": total_pages,
+            }

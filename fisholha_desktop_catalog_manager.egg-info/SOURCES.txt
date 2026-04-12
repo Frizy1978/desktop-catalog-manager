@@ -7,6 +7,12 @@ app/core/database.py
 app/core/paths.py
 app/core/security.py
 app/core/settings.py
+app/db/__init__.py
+app/db/base.py
+app/db/models.py
+app/db/session.py
+app/integrations/__init__.py
+app/integrations/woocommerce_client.py
 app/models/__init__.py
 app/models/enums.py
 app/models/user.py
@@ -22,9 +28,13 @@ app/modules/sync/__init__.py
 app/repositories/__init__.py
 app/repositories/auth_repository.py
 app/repositories/catalog_repository.py
+app/repositories/category_repository.py
+app/repositories/product_repository.py
+app/repositories/sync_run_repository.py
 app/services/__init__.py
 app/services/auth_service.py
 app/services/catalog_service.py
+app/services/sync_import_service.py
 app/ui/__init__.py
 app/ui/icons.py
 app/ui/login_dialog.py
@@ -44,4 +54,5 @@ fisholha_desktop_catalog_manager.egg-info/SOURCES.txt
 fisholha_desktop_catalog_manager.egg-info/dependency_links.txt
 fisholha_desktop_catalog_manager.egg-info/requires.txt
 fisholha_desktop_catalog_manager.egg-info/top_level.txt
+tests/test_phase2_models.py
 tests/test_schema_smoke.py

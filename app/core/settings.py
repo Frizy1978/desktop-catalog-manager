@@ -18,7 +18,8 @@ def _load_env_file(env_file: Path) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+        # Runtime settings must reflect latest saved .env values immediately.
+        os.environ[key] = value
 
 
 def _default_app_data_dir() -> Path:
@@ -36,6 +37,14 @@ def _read_env(key: str, default: str) -> str:
     return value if value else default
 
 
+def _read_int_env(key: str, default: int) -> int:
+    raw_value = _read_env(key, str(default))
+    try:
+        return int(raw_value)
+    except ValueError:
+        return default
+
+
 @dataclass(slots=True)
 class AppSettings:
     app_name: str
@@ -45,6 +54,11 @@ class AppSettings:
     logs_dir: Path
     default_admin_username: str
     default_admin_password: str
+    wc_base_url: str
+    wc_consumer_key: str
+    wc_consumer_secret: str
+    wc_timeout_seconds: int
+    wc_verify_ssl: bool
 
     @classmethod
     def load(cls) -> "AppSettings":
@@ -73,4 +87,10 @@ class AppSettings:
             default_admin_password=_read_env(
                 "FISHOLHA_DEFAULT_ADMIN_PASSWORD", "admin123"
             ),
+            wc_base_url=_read_env("FISHOLHA_WC_BASE_URL", "https://fisholha.ru/"),
+            wc_consumer_key=_read_env("FISHOLHA_WC_CONSUMER_KEY", ""),
+            wc_consumer_secret=_read_env("FISHOLHA_WC_CONSUMER_SECRET", ""),
+            wc_timeout_seconds=_read_int_env("FISHOLHA_WC_TIMEOUT_SECONDS", 20),
+            wc_verify_ssl=_read_env("FISHOLHA_WC_VERIFY_SSL", "true").lower()
+            in {"1", "true", "yes", "on"},
         )

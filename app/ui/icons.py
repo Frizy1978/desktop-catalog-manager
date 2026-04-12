@@ -25,6 +25,7 @@ ICON_NAME_BY_KEY = {
     "bulk_actions": "mdi6.select-multiple",
     "settings": "mdi6.cog-outline",
     "logs": "mdi6.text-box-search-outline",
+    "refresh": "mdi6.refresh",
     "add_category": "mdi6.plus",
     "edit_category": "mdi6.pencil-outline",
     "archive_category": "mdi6.archive-outline",

@@ -15,13 +15,20 @@ from PySide6.QtWidgets import (
 
 from app.models.user import AuthenticatedUser
 from app.services.auth_service import AuthService
+from app.services.login_memory_service import LoginMemoryService
 from app.ui.icons import app_logo_pixmap, themed_icon
 
 
 class LoginDialog(QDialog):
-    def __init__(self, auth_service: AuthService, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        auth_service: AuthService,
+        login_memory_service: LoginMemoryService | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._auth_service = auth_service
+        self._login_memory_service = login_memory_service
         self.authenticated_user: AuthenticatedUser | None = None
 
         self.setWindowTitle("Вход в систему")
@@ -29,6 +36,7 @@ class LoginDialog(QDialog):
         self.setMinimumWidth(420)
 
         self._build_ui()
+        self._load_remembered_credentials()
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -63,9 +71,14 @@ class LoginDialog(QDialog):
 
         form_layout.addRow("Логин", self.username_input)
         form_layout.addRow("Пароль", self.password_input)
+
         self.show_password_checkbox = QCheckBox("Показать пароль")
         self.show_password_checkbox.toggled.connect(self._toggle_password_visibility)
         form_layout.addRow("", self.show_password_checkbox)
+
+        self.remember_password_checkbox = QCheckBox("Сохранить пароль")
+        form_layout.addRow("", self.remember_password_checkbox)
+
         root_layout.addLayout(form_layout)
 
         self.error_label = QLabel("")
@@ -84,6 +97,16 @@ class LoginDialog(QDialog):
         self.username_input.returnPressed.connect(self._attempt_login)
         self.password_input.returnPressed.connect(self._attempt_login)
 
+    def _load_remembered_credentials(self) -> None:
+        if self._login_memory_service is None:
+            return
+        remembered = self._login_memory_service.load()
+        if remembered.username:
+            self.username_input.setText(remembered.username)
+        if remembered.remember_password:
+            self.password_input.setText(remembered.password)
+            self.remember_password_checkbox.setChecked(True)
+
     def _attempt_login(self) -> None:
         username = self.username_input.text().strip()
         password = self.password_input.text()
@@ -96,6 +119,12 @@ class LoginDialog(QDialog):
         if user is None:
             self._show_error("Неверные учетные данные.")
             return
+
+        if self._login_memory_service is not None:
+            if self.remember_password_checkbox.isChecked():
+                self._login_memory_service.save(username=username, password=password)
+            else:
+                self._login_memory_service.clear()
 
         self.authenticated_user = user
         self.accept()

@@ -46,6 +46,28 @@ Phase 1 initializes these tables:
 - `sync_runs`
 - `publish_jobs`
 
+## Phase 2 Data Layer
+- SQLAlchemy 2.0 model layer added for:
+  - `Category`
+  - `Product`
+  - `ProductImage`
+  - `ProductCategoryLink`
+  - `SyncRun`
+- Repository layer handles upsert and read-model queries.
+- WooCommerce import flow:
+  1. import categories
+  2. bind category parent links
+  3. import products
+  4. bind product-category links
+  5. store image URLs as metadata (`product_images.original_path`)
+  6. write sync run result in `sync_runs`
+
+## Product Image Rules
+- One product can have multiple image records.
+- Exactly one image per product is marked as primary (`is_primary = true`).
+- `original_path` stores source URL from WooCommerce.
+- `local_path` is reserved for future local media files and is currently nullable.
+
 ## Scope Boundary
 Phase 1 does not implement:
 - full WooCommerce import/publish logic
