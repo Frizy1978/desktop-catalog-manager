@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fisholha-desktop-catalog-manager"
+version = "0.1.0"
+description = "Fish Olha Desktop Catalog Manager v1 (Phase 1 foundation)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "PySide6>=6.8,<7.0",
+  "qtawesome>=1.4,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*", "logs*", "media*", "Icons*", "docs*"]

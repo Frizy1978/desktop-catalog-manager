@@ -1,0 +1,5 @@
+PySide6<7.0,>=6.8
+qtawesome<2.0,>=1.4
+
+[dev]
+pytest<9.0,>=8.0

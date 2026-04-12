@@ -1,0 +1,1 @@
+"""Reusable main-window widgets."""

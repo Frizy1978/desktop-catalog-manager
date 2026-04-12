@@ -103,6 +103,9 @@ Use:
 - soft shadows
 - strong table usability
 - clear loading / empty / error states
+- Russian UI text in UTF-8 for all user-facing labels/messages/buttons
+- clear contextual icons for primary and secondary action buttons
+- modern third-party icon set for interface actions (avoid system icons)
 
 Avoid:
 - flashy experimental design
@@ -110,6 +113,8 @@ Avoid:
 - neon palettes
 - decorative clutter
 - overcomplicated workflows
+- mixed-language (Russian/English) UI text in visible interface elements
+- dependence on OS/system iconography for main action buttons
 
 ---
 
