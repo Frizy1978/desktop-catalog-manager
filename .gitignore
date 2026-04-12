@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Build / packaging
+build/
+dist/
+*.spec
+
+# Qt / local app artifacts
+*.db
+*.sqlite
+*.sqlite3
+instance/
+logs/
+tmp/
+cache/
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets / local config
+.env
+.env.local
+settings.local.json
+config.local.json
+
+# Media working dirs
+media/
+exports/
+backups/
