@@ -59,6 +59,34 @@ class SqlAlchemyDatabase:
                 connection.exec_driver_sql(
                     "ALTER TABLE product_images ADD COLUMN local_path TEXT"
                 )
+            if "source_type" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE product_images ADD COLUMN source_type TEXT NOT NULL DEFAULT 'wc_url'"
+                )
+            if "metadata_json" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE product_images ADD COLUMN metadata_json TEXT"
+                )
+
+            category_table_info = connection.exec_driver_sql("PRAGMA table_info(categories)")
+            category_columns = {row[1] for row in category_table_info.fetchall()}
+            if "image_source_url" not in category_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE categories ADD COLUMN image_source_url TEXT"
+                )
+            if "image_local_path" not in category_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE categories ADD COLUMN image_local_path TEXT"
+                )
+            connection.exec_driver_sql(
+                """
+                UPDATE categories
+                SET image_source_url = image_path
+                WHERE (image_source_url IS NULL OR image_source_url = '')
+                  AND image_path IS NOT NULL
+                  AND image_path != ''
+                """
+            )
 
             connection.exec_driver_sql(
                 """

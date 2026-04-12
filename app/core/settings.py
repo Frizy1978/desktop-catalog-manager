@@ -59,6 +59,8 @@ class AppSettings:
     wc_consumer_secret: str
     wc_timeout_seconds: int
     wc_verify_ssl: bool
+    log_max_bytes: int
+    log_backup_count: int
 
     @classmethod
     def load(cls) -> "AppSettings":
@@ -93,4 +95,6 @@ class AppSettings:
             wc_timeout_seconds=_read_int_env("FISHOLHA_WC_TIMEOUT_SECONDS", 20),
             wc_verify_ssl=_read_env("FISHOLHA_WC_VERIFY_SSL", "true").lower()
             in {"1", "true", "yes", "on"},
+            log_max_bytes=max(1024 * 1024, _read_int_env("FISHOLHA_LOG_MAX_BYTES", 5 * 1024 * 1024)),
+            log_backup_count=max(1, _read_int_env("FISHOLHA_LOG_BACKUP_COUNT", 10)),
         )

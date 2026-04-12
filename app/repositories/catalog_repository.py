@@ -107,7 +107,7 @@ class CatalogRepository:
         price_unit: str | None,
         sku: str | None,
         category_ids: list[int],
-        image_urls: list[str],
+        image_urls: list[str] | None = None,
     ) -> int:
         with self._database.session_scope() as session:
             return self._product_repository.create_product(
@@ -131,7 +131,7 @@ class CatalogRepository:
         price_unit: str | None,
         sku: str | None,
         category_ids: list[int],
-        image_urls: list[str],
+        image_urls: list[str] | None = None,
     ) -> None:
         with self._database.session_scope() as session:
             self._product_repository.update_product(

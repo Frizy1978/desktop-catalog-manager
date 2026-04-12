@@ -81,7 +81,7 @@ class CatalogService:
         price_unit: str | None,
         sku: str | None,
         category_ids: list[int],
-        image_urls: list[str],
+        image_urls: list[str] | None = None,
     ) -> int:
         return self._repository.create_product(
             name=name,
@@ -103,7 +103,7 @@ class CatalogService:
         price_unit: str | None,
         sku: str | None,
         category_ids: list[int],
-        image_urls: list[str],
+        image_urls: list[str] | None = None,
     ) -> None:
         self._repository.update_product(
             product_id=product_id,

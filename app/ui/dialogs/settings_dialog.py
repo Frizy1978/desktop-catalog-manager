@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -14,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.paths import ensure_directory
+from app.core.settings import AppSettings
 from app.models.user import AuthenticatedUser
 from app.services.auth_service import AuthService
 from app.services.catalog_maintenance_service import CatalogMaintenanceService
@@ -36,6 +42,7 @@ class SettingsDialog(QDialog):
         self._auth_service = auth_service
         self._current_user = current_user
         self._catalog_maintenance_service = catalog_maintenance_service
+        self._settings = AppSettings.load()
 
         self.wc_settings_changed = False
         self.catalog_cleared = False
@@ -53,6 +60,7 @@ class SettingsDialog(QDialog):
         root.addWidget(self._build_wc_group())
         root.addWidget(self._build_admin_group())
         root.addWidget(self._build_maintenance_group())
+        root.addWidget(self._build_logging_group())
 
         controls = QHBoxLayout()
         controls.addStretch()
@@ -125,6 +133,34 @@ class SettingsDialog(QDialog):
         clear_button.clicked.connect(self._clear_catalog)
         layout.addWidget(clear_button)
         return group
+
+    def _build_logging_group(self) -> QGroupBox:
+        group = QGroupBox("Логи")
+        layout = QFormLayout(group)
+
+        max_bytes = int(self._settings.log_max_bytes)
+        backup_count = int(self._settings.log_backup_count)
+        logs_dir = str(self._settings.logs_dir)
+
+        size_text = f"{max_bytes:,} байт ({self._format_megabytes(max_bytes):.2f} МБ)".replace(",", " ")
+        self.log_rotation_size_label = QLabel(size_text)
+        self.log_rotation_backups_label = QLabel(str(backup_count))
+        self.logs_dir_label = QLabel(logs_dir)
+        self.logs_dir_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        layout.addRow("Макс. размер файла лога", self.log_rotation_size_label)
+        layout.addRow("Количество архивов", self.log_rotation_backups_label)
+        layout.addRow("Папка логов", self.logs_dir_label)
+
+        open_logs_button = QPushButton("Открыть папку логов")
+        open_logs_button.setIcon(themed_icon("logs", color="#ffffff"))
+        open_logs_button.clicked.connect(self._open_logs_folder)
+        layout.addRow("", open_logs_button)
+        return group
+
+    @staticmethod
+    def _format_megabytes(bytes_count: int) -> float:
+        return bytes_count / float(1024 * 1024)
 
     def _load_wc_settings(self) -> None:
         values = self._env_config_service.load_values(
@@ -218,3 +254,14 @@ class SettingsDialog(QDialog):
             "Каталог очищен",
             f"Очистка завершена.\nBackup создан:\n{backup_path}",
         )
+
+    def _open_logs_folder(self) -> None:
+        logs_dir = Path(self._settings.logs_dir)
+        ensure_directory(logs_dir)
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(logs_dir)))
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "Не удалось открыть папку",
+                f"Не удалось открыть папку логов:\n{logs_dir}",
+            )

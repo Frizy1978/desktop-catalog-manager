@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.db.session import SqlAlchemyDatabase
-from app.integrations.woocommerce_client import (
-    WooCommerceClient,
-    WooCommerceClientError,
-)
+from app.integrations.woocommerce_client import WooCommerceClient, WooCommerceClientError
 from app.repositories.category_repository import CategoryRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sync_run_repository import SyncRunRepository
+from app.services.wc_image_download_service import WooImageDownloadService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -19,9 +19,6 @@ class ImportRunResult:
     success: bool
     counters: dict[str, int]
     errors: list[str]
-
-
-logger = logging.getLogger(__name__)
 
 
 class WooCommerceImportService:
@@ -32,12 +29,14 @@ class WooCommerceImportService:
         product_repository: ProductRepository,
         sync_run_repository: SyncRunRepository,
         wc_client: WooCommerceClient,
+        image_download_service: WooImageDownloadService | None = None,
     ) -> None:
         self._database = database
         self._category_repository = category_repository
         self._product_repository = product_repository
         self._sync_run_repository = sync_run_repository
         self._wc_client = wc_client
+        self._image_download_service = image_download_service
 
     def run_initial_import(
         self,
@@ -54,8 +53,19 @@ class WooCommerceImportService:
             "products_updated": 0,
             "product_category_links": 0,
             "product_images": 0,
+            "images_downloaded": 0,
+            "images_reused_existing": 0,
+            "images_failed": 0,
+            "images_legacy_deleted": 0,
+            "images_dirs_deleted": 0,
+            "category_images_downloaded": 0,
+            "category_images_reused_existing": 0,
+            "category_images_failed": 0,
+            "category_images_deleted": 0,
+            "category_images_dirs_deleted": 0,
         }
         errors: list[str] = []
+        logger.info("Import run started: run_id=%s", run_id)
 
         try:
             self._emit_progress(progress_callback, 5, "Загрузка категорий из WooCommerce...")
@@ -63,18 +73,16 @@ class WooCommerceImportService:
                 page_callback=lambda page, total: self._emit_progress(
                     progress_callback,
                     self._page_progress(5, 25, page, total),
-                    f"Загрузка категорий: страница {page}"
-                    + (f" из {total}" if total else ""),
+                    f"Загрузка категорий: страница {page}" + (f" из {total}" if total else ""),
                 )
             )
             counters["categories_total"] = len(category_payloads)
+            logger.info("Fetched categories from WooCommerce: %s", len(category_payloads))
 
             with self._database.session_scope() as session:
                 total_categories = max(len(category_payloads), 1)
                 for index, payload in enumerate(category_payloads, start=1):
-                    _, created = self._category_repository.upsert_from_wc_payload(
-                        session, payload
-                    )
+                    _, created = self._category_repository.upsert_from_wc_payload(session, payload)
                     if created:
                         counters["categories_created"] += 1
                     else:
@@ -84,34 +92,30 @@ class WooCommerceImportService:
                         25 + int((index / total_categories) * 20),
                         f"Сохранение категорий: {index}/{len(category_payloads)}",
                     )
-                self._category_repository.bind_parent_links_from_wc(
-                    session,
-                    category_payloads,
-                )
-            self._emit_progress(
-                progress_callback, 47, "Связывание иерархии категорий завершено"
+                self._category_repository.bind_parent_links_from_wc(session, category_payloads)
+            logger.info(
+                "Categories upsert finished: created=%s updated=%s",
+                counters["categories_created"],
+                counters["categories_updated"],
             )
+            self._emit_progress(progress_callback, 47, "Иерархия категорий сохранена")
 
             self._emit_progress(progress_callback, 50, "Загрузка товаров из WooCommerce...")
             product_payloads = self._wc_client.fetch_products(
                 page_callback=lambda page, total: self._emit_progress(
                     progress_callback,
                     self._page_progress(50, 70, page, total),
-                    f"Загрузка товаров: страница {page}"
-                    + (f" из {total}" if total else ""),
+                    f"Загрузка товаров: страница {page}" + (f" из {total}" if total else ""),
                 )
             )
             counters["products_total"] = len(product_payloads)
+            logger.info("Fetched products from WooCommerce: %s", len(product_payloads))
 
             with self._database.session_scope() as session:
-                category_id_map = self._category_repository.external_to_local_id_map(
-                    session
-                )
+                category_id_map = self._category_repository.external_to_local_id_map(session)
                 total_products = max(len(product_payloads), 1)
                 for index, payload in enumerate(product_payloads, start=1):
-                    product, created = self._product_repository.upsert_from_wc_payload(
-                        session, payload
-                    )
+                    product, created = self._product_repository.upsert_from_wc_payload(session, payload)
                     session.flush()
                     if created:
                         counters["products_created"] += 1
@@ -137,16 +141,60 @@ class WooCommerceImportService:
                     counters["product_images"] += images_count
                     self._emit_progress(
                         progress_callback,
-                        70 + int((index / total_products) * 25),
+                        70 + int((index / total_products) * 20),
                         f"Сохранение товаров: {index}/{len(product_payloads)}",
                     )
+            logger.info(
+                "Products upsert finished: created=%s updated=%s product_images=%s",
+                counters["products_created"],
+                counters["products_updated"],
+                counters["product_images"],
+            )
 
+            if self._image_download_service is not None:
+                self._emit_progress(progress_callback, 90, "Скачивание изображений товаров...")
+                product_image_result = self._image_download_service.download_all_missing_product_images()
+                counters["images_downloaded"] = product_image_result.downloaded
+                counters["images_reused_existing"] = product_image_result.reused_existing
+                counters["images_failed"] = product_image_result.failed
+                counters["images_legacy_deleted"] = product_image_result.legacy_deleted
+                counters["images_dirs_deleted"] = product_image_result.directories_deleted
+                if product_image_result.errors:
+                    errors.extend(product_image_result.errors)
+
+                self._emit_progress(progress_callback, 96, "Скачивание изображений категорий...")
+                category_image_result = self._image_download_service.download_all_missing_category_images()
+                counters["category_images_downloaded"] = category_image_result.downloaded
+                counters["category_images_reused_existing"] = category_image_result.reused_existing
+                counters["category_images_failed"] = category_image_result.failed
+                counters["category_images_deleted"] = category_image_result.legacy_deleted
+                counters["category_images_dirs_deleted"] = category_image_result.directories_deleted
+                if category_image_result.errors:
+                    errors.extend(category_image_result.errors)
+
+                logger.info(
+                    "Image stages finished: products(downloaded=%s reused=%s failed=%s) categories(downloaded=%s reused=%s failed=%s)",
+                    counters["images_downloaded"],
+                    counters["images_reused_existing"],
+                    counters["images_failed"],
+                    counters["category_images_downloaded"],
+                    counters["category_images_reused_existing"],
+                    counters["category_images_failed"],
+                )
+
+            run_status = "success" if not errors else "error"
             self._sync_run_repository.finish_run(
                 run_id,
-                status="success",
+                status=run_status,
                 counters=counters,
-                errors=[],
+                errors=errors,
             )
+            logger.info("Import run finished: run_id=%s status=%s counters=%s", run_id, run_status, counters)
+
+            if errors:
+                self._emit_progress(progress_callback, 100, "Импорт завершен с частичными ошибками")
+                return ImportRunResult(success=False, counters=counters, errors=errors)
+
             self._emit_progress(progress_callback, 100, "Импорт завершен успешно")
             return ImportRunResult(success=True, counters=counters, errors=[])
         except WooCommerceClientError as exc:
@@ -165,6 +213,7 @@ class WooCommerceImportService:
             counters=counters,
             errors=errors,
         )
+        logger.error("Import run failed: run_id=%s errors=%s", run_id, errors)
         self._emit_progress(progress_callback, 100, "Импорт завершен с ошибкой")
         return ImportRunResult(success=False, counters=counters, errors=errors)
 

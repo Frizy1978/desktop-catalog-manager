@@ -30,6 +30,8 @@ class Category(Base):
         ForeignKey("categories.id"), nullable=True
     )
     image_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_source_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    image_local_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     external_wc_id: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True, unique=True
     )
@@ -136,6 +138,12 @@ class ProductImage(Base):
     )
     original_path: Mapped[str] = mapped_column(Text, nullable=False)
     local_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="wc_url",
+    )
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, UTC
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -16,7 +16,11 @@ class SyncRunRepository:
 
     def start_run(self, sync_type: str) -> int:
         with self._database.session_scope() as session:
-            run = SyncRun(sync_type=sync_type, status="running")
+            run = SyncRun(
+                sync_type=sync_type,
+                status="running",
+                started_at=datetime.now(),
+            )
             session.add(run)
             session.flush()
             return int(run.id)
@@ -34,7 +38,7 @@ class SyncRunRepository:
             if run is None:
                 return
             run.status = status
-            run.finished_at = datetime.now(UTC)
+            run.finished_at = datetime.now()
             run.counters_json = json.dumps(counters or {}, ensure_ascii=False)
             run.errors_json = json.dumps(errors or [], ensure_ascii=False)
 

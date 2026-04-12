@@ -14,6 +14,7 @@ from app.repositories.auth_repository import AuthRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.category_repository import CategoryRepository
 from app.repositories.product_repository import ProductRepository
+from app.repositories.product_image_repository import ProductImageRepository
 from app.repositories.sync_run_repository import SyncRunRepository
 from app.services.auth_service import AuthService
 from app.services.catalog_maintenance_service import CatalogMaintenanceService
@@ -21,7 +22,9 @@ from app.services.catalog_service import CatalogService
 from app.services.env_config_service import EnvConfigService
 from app.services.login_memory_service import LoginMemoryService
 from app.services.operation_log_service import OperationLogService
+from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import WooCommerceImportService
+from app.services.wc_image_download_service import WooImageDownloadService
 from app.ui.icons import app_logo_icon
 from app.ui.login_dialog import LoginDialog
 from app.ui.main_window import MainWindow
@@ -30,7 +33,11 @@ from app.ui.styles import apply_styles
 
 def run() -> int:
     settings = AppSettings.load()
-    configure_logging(settings.logs_dir)
+    configure_logging(
+        settings.logs_dir,
+        max_bytes=settings.log_max_bytes,
+        backup_count=settings.log_backup_count,
+    )
 
     database = Database(db_path=settings.db_path)
     database.initialize()
@@ -55,6 +62,11 @@ def run() -> int:
     )
     login_memory_service = LoginMemoryService(
         storage_path=settings.app_data_dir / "login_memory.json"
+    )
+    product_image_service = ProductImageService(
+        database=orm_database,
+        repository=ProductImageRepository(),
+        media_root=settings.media_dir,
     )
     sync_run_repository = SyncRunRepository(database=orm_database)
     operation_log_service = OperationLogService(repository=sync_run_repository)
@@ -87,6 +99,7 @@ def run() -> int:
         env_config_service=env_config_service,
         catalog_maintenance_service=catalog_maintenance_service,
         operation_log_service=operation_log_service,
+        product_image_service=product_image_service,
         import_service_factory=import_service_factory,
         import_service=import_service,
     )
@@ -118,10 +131,19 @@ def _build_import_service(
             verify_ssl=settings.wc_verify_ssl,
         )
     )
+    image_download_service = WooImageDownloadService(
+        database=orm_database,
+        product_repository=ProductImageRepository(),
+        category_repository=CategoryRepository(),
+        media_root=settings.media_dir,
+        timeout_seconds=settings.wc_timeout_seconds,
+        verify_ssl=settings.wc_verify_ssl,
+    )
     return WooCommerceImportService(
         database=orm_database,
         category_repository=CategoryRepository(),
         product_repository=ProductRepository(),
         sync_run_repository=sync_run_repository,
         wc_client=wc_client,
+        image_download_service=image_download_service,
     )

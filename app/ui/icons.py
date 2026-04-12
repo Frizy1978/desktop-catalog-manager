@@ -21,6 +21,8 @@ ICON_NAME_BY_KEY = {
     "add_product": "mdi6.plus-box-outline",
     "edit_product": "mdi6.pencil-outline",
     "delete_product": "mdi6.delete-outline",
+    "set_primary": "mdi6.star-outline",
+    "preview_image": "mdi6.eye-outline",
     "archive_product": "mdi6.archive-outline",
     "import_photos": "mdi6.image-plus-outline",
     "bulk_actions": "mdi6.select-multiple",

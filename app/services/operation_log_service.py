@@ -43,6 +43,8 @@ class OperationLogService:
 
     def _format_dt(self, value: Any) -> str:
         if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone()
             return value.strftime("%Y-%m-%d %H:%M:%S")
         return "-"
 
@@ -51,6 +53,10 @@ class OperationLogService:
             return "-"
         if not isinstance(finished_at, datetime):
             return "выполняется"
+        if started_at.tzinfo is not None:
+            started_at = started_at.astimezone()
+        if finished_at.tzinfo is not None:
+            finished_at = finished_at.astimezone()
         seconds = int(max(0.0, (finished_at - started_at).total_seconds()))
         minutes, sec = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)

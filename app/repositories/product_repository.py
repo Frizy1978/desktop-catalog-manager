@@ -65,7 +65,6 @@ class ProductRepository:
         product_id: int,
         images: list[dict[str, Any]],
     ) -> int:
-        session.execute(delete(ProductImage).where(ProductImage.product_id == product_id))
         prepared: list[tuple[str, int, bool]] = []
         for image in images:
             src = str(image.get("src") or "").strip()
@@ -75,30 +74,68 @@ class ProductRepository:
             preferred_primary = position == 0
             prepared.append((src, position, preferred_primary))
 
+        existing_wc_images = session.scalars(
+            select(ProductImage).where(
+                ProductImage.product_id == product_id,
+                ProductImage.source_type == "wc_url",
+            )
+        ).all()
+        existing_by_src: dict[str, list[ProductImage]] = {}
+        for image_row in existing_wc_images:
+            key = str(image_row.original_path or "").strip()
+            if not key:
+                continue
+            existing_by_src.setdefault(key, []).append(image_row)
+        for image_rows in existing_by_src.values():
+            image_rows.sort(key=lambda row: int(row.id))
+
         if not prepared:
+            for image_row in existing_wc_images:
+                session.delete(image_row)
             return 0
 
         prepared.sort(key=lambda item: item[1])
-
         primary_index = 0
         for index, item in enumerate(prepared):
             if item[2]:
                 primary_index = index
                 break
 
-        inserted = 0
+        used_ids: set[int] = set()
+        active_count = 0
         for index, (src, position, _preferred_primary) in enumerate(prepared):
-            session.add(
-                ProductImage(
+            candidates = existing_by_src.get(src) or []
+            target_row: ProductImage | None = None
+            for candidate in candidates:
+                if int(candidate.id) not in used_ids:
+                    target_row = candidate
+                    break
+
+            if target_row is None:
+                target_row = ProductImage(
                     product_id=product_id,
                     original_path=src,
                     local_path=None,
-                    is_primary=(index == primary_index),
+                    source_type="wc_url",
+                    metadata_json=None,
+                    is_primary=False,
                     sort_order=position,
                 )
-            )
-            inserted += 1
-        return inserted
+                session.add(target_row)
+                session.flush()
+            else:
+                target_row.original_path = src
+                target_row.source_type = "wc_url"
+                target_row.sort_order = position
+
+            target_row.is_primary = index == primary_index
+            used_ids.add(int(target_row.id))
+            active_count += 1
+
+        for image_row in existing_wc_images:
+            if int(image_row.id) not in used_ids:
+                session.delete(image_row)
+        return active_count
 
     def list_products_for_table(
         self,
@@ -236,7 +273,7 @@ class ProductRepository:
         price_unit: str | None,
         sku: str | None,
         category_ids: list[int],
-        image_urls: list[str],
+        image_urls: list[str] | None = None,
     ) -> int:
         normalized_name = name.strip()
         if not normalized_name:
@@ -277,11 +314,12 @@ class ProductRepository:
             product_id=int(product.id),
             category_ids=category_ids,
         )
-        self._replace_images_from_urls(
-            session,
-            product_id=int(product.id),
-            image_urls=image_urls,
-        )
+        if image_urls is not None:
+            self._replace_images_from_urls(
+                session,
+                product_id=int(product.id),
+                image_urls=image_urls,
+            )
         return int(product.id)
 
     def update_product(
@@ -295,7 +333,7 @@ class ProductRepository:
         price_unit: str | None,
         sku: str | None,
         category_ids: list[int],
-        image_urls: list[str],
+        image_urls: list[str] | None = None,
     ) -> None:
         product = session.scalar(
             select(Product).where(
@@ -339,11 +377,12 @@ class ProductRepository:
             product_id=int(product.id),
             category_ids=category_ids,
         )
-        self._replace_images_from_urls(
-            session,
-            product_id=int(product.id),
-            image_urls=image_urls,
-        )
+        if image_urls is not None:
+            self._replace_images_from_urls(
+                session,
+                product_id=int(product.id),
+                image_urls=image_urls,
+            )
 
     def archive_product(self, session: Session, product_id: int) -> bool:
         product = session.scalar(

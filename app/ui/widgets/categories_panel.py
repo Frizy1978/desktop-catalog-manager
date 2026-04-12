@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -26,6 +27,7 @@ class CategoriesPanel(QWidget):
         super().__init__(parent)
         self._categories: list[dict] = []
         self._selected_category_id: int | None = None
+        self._thumb_icon_cache: dict[str, QIcon | None] = {}
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -40,6 +42,7 @@ class CategoriesPanel(QWidget):
 
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderHidden(True)
+        self.tree_widget.setIconSize(QSize(20, 20))
         self.tree_widget.setStyleSheet(
             """
             QTreeWidget::item:selected {
@@ -75,6 +78,7 @@ class CategoriesPanel(QWidget):
     ) -> None:
         self._categories = list(categories)
         self._selected_category_id = selected_category_id
+        self._thumb_icon_cache.clear()
         self._rebuild_tree()
 
     def selected_category_id(self) -> int | None:
@@ -150,9 +154,7 @@ class CategoriesPanel(QWidget):
                 include_ids.add(int(parent_id))
                 cursor = by_id.get(int(parent_id))
 
-        return [
-            item for item in self._categories if int(item.get("id") or 0) in include_ids
-        ]
+        return [item for item in self._categories if int(item.get("id") or 0) in include_ids]
 
     def _add_children(
         self,
@@ -167,6 +169,7 @@ class CategoriesPanel(QWidget):
             item = QTreeWidgetItem([str(category.get("name", "Без названия"))])
             category_id = int(category["id"])
             item.setData(0, Qt.ItemDataRole.UserRole, category_id)
+            self._apply_category_thumbnail(item, category)
             self._apply_unsynced_style(item, str(category.get("sync_status", "")))
             parent_item.addChild(item)
             self._add_children(item, children_by_parent, category_id)
@@ -181,13 +184,44 @@ class CategoriesPanel(QWidget):
         font.setBold(True)
         item.setFont(0, font)
 
+    def _apply_category_thumbnail(self, item: QTreeWidgetItem, category: dict) -> None:
+        preview_path = str(category.get("image_preview_path") or "").strip()
+        if not preview_path:
+            return
+        icon = self._resolve_thumbnail_icon(preview_path)
+        if icon is not None:
+            item.setIcon(0, icon)
+
+    def _resolve_thumbnail_icon(self, preview_path: str) -> QIcon | None:
+        cached = self._thumb_icon_cache.get(preview_path)
+        if preview_path in self._thumb_icon_cache:
+            return cached
+
+        candidate = Path(preview_path)
+        if not candidate.exists() or not candidate.is_file():
+            self._thumb_icon_cache[preview_path] = None
+            return None
+
+        pixmap = QPixmap(str(candidate))
+        if pixmap.isNull():
+            self._thumb_icon_cache[preview_path] = None
+            return None
+
+        thumb = pixmap.scaled(
+            20,
+            20,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        icon = QIcon(thumb)
+        self._thumb_icon_cache[preview_path] = icon
+        return icon
+
     def _find_item_by_category_id(self, category_id: int | None) -> QTreeWidgetItem | None:
         if category_id is None:
             return self.tree_widget.topLevelItem(0)
         root = self.tree_widget.invisibleRootItem()
-        stack: list[QTreeWidgetItem] = [
-            root.child(i) for i in range(root.childCount())
-        ]
+        stack: list[QTreeWidgetItem] = [root.child(i) for i in range(root.childCount())]
         while stack:
             item = stack.pop()
             if item.data(0, Qt.ItemDataRole.UserRole) == category_id:

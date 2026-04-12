@@ -19,6 +19,7 @@ from app.services.catalog_maintenance_service import CatalogMaintenanceService
 from app.services.catalog_service import CatalogService
 from app.services.env_config_service import EnvConfigService
 from app.services.operation_log_service import OperationLogService
+from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import ImportRunResult, WooCommerceImportService
 from app.ui.dialogs.category_editor_dialog import CategoryEditorDialog
 from app.ui.dialogs.operation_log_dialog import OperationLogDialog
@@ -41,6 +42,7 @@ class MainWindow(QMainWindow):
         env_config_service: EnvConfigService,
         catalog_maintenance_service: CatalogMaintenanceService,
         operation_log_service: OperationLogService,
+        product_image_service: ProductImageService,
         import_service_factory: Callable[[], WooCommerceImportService | None],
         import_service: WooCommerceImportService | None = None,
         parent: QWidget | None = None,
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self._env_config_service = env_config_service
         self._catalog_maintenance_service = catalog_maintenance_service
         self._operation_log_service = operation_log_service
+        self._product_image_service = product_image_service
         self._import_service_factory = import_service_factory
         self._import_service = import_service
 
@@ -232,13 +235,20 @@ class MainWindow(QMainWindow):
         dialog = ProductEditorDialog(
             category_options=category_options,
             product_data=None,
+            product_id=None,
+            product_image_service=self._product_image_service,
             parent=self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
             return
 
+        payload = self._extract_product_payload(dialog.result_data)
         try:
-            self._catalog_service.create_product(**dialog.result_data)
+            created_product_id = self._catalog_service.create_product(**payload)
+            self._attach_pending_images(
+                created_product_id,
+                dialog.result_data.get("pending_local_images", []),
+            )
         except ValueError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
@@ -262,21 +272,59 @@ class MainWindow(QMainWindow):
         dialog = ProductEditorDialog(
             category_options=category_options,
             product_data=product_data,
+            product_id=product_id,
+            product_image_service=self._product_image_service,
             parent=self,
         )
         if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
             return
 
+        payload = self._extract_product_payload(dialog.result_data)
         try:
             self._catalog_service.update_product(
                 product_id=product_id,
-                **dialog.result_data,
+                **payload,
+            )
+            self._attach_pending_images(
+                product_id,
+                dialog.result_data.get("pending_local_images", []),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
 
         self._reload_catalog_view()
+
+    def _extract_product_payload(self, result_data: dict) -> dict:
+        return {
+            "name": result_data.get("name"),
+            "description": result_data.get("description"),
+            "price": result_data.get("price"),
+            "price_unit": result_data.get("price_unit"),
+            "sku": result_data.get("sku"),
+            "category_ids": result_data.get("category_ids", []),
+            "image_urls": None,
+        }
+
+    def _attach_pending_images(
+        self,
+        product_id: int,
+        pending_local_images: list[dict],
+    ) -> None:
+        if not pending_local_images:
+            return
+
+        primary_image_id: int | None = None
+        for image_row in pending_local_images:
+            source_path = str(image_row.get("path") or "").strip()
+            if not source_path:
+                continue
+            added_row = self._product_image_service.add_local_image(product_id, source_path)
+            if bool(image_row.get("is_primary")):
+                primary_image_id = int(added_row["id"])
+
+        if primary_image_id is not None:
+            self._product_image_service.set_primary_image(product_id, primary_image_id)
 
     def _delete_selected_product(self) -> None:
         product_id = self._selected_product_id or self.products_table_panel.selected_product_id()

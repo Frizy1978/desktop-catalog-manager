@@ -16,18 +16,27 @@ class CategoryRepository:
         payload: dict[str, Any],
     ) -> tuple[Category, bool]:
         wc_id = int(payload["id"])
-        category = session.scalar(
-            select(Category).where(Category.external_wc_id == wc_id)
-        )
+        category = session.scalar(select(Category).where(Category.external_wc_id == wc_id))
         created = category is None
         if category is None:
             category = Category(external_wc_id=wc_id)
             session.add(category)
 
+        source_url = str((payload.get("image") or {}).get("src") or "").strip() or None
         category.name = str(payload.get("name") or f"Категория {wc_id}")
         category.slug = str(payload.get("slug") or f"wc-category-{wc_id}")
         category.description = payload.get("description")
-        category.image_path = (payload.get("image") or {}).get("src")
+
+        # Keep backward compatibility with existing UI field.
+        category.image_path = source_url
+
+        previous_source_url = (category.image_source_url or "").strip() or None
+        category.image_source_url = source_url
+        if source_url is None:
+            category.image_local_path = None
+        elif previous_source_url != source_url:
+            category.image_local_path = None
+
         category.sync_status = "imported"
         category.is_archived = False
         return category, created
@@ -61,27 +70,88 @@ class CategoryRepository:
                 Category.name,
                 Category.parent_id,
                 Category.sync_status,
+                Category.image_path,
+                Category.image_local_path,
             )
             .where(Category.is_archived.is_(False))
             .order_by(Category.name.asc())
         ).all()
         return [
             {
-                "id": row.id,
-                "name": row.name,
+                "id": int(row.id),
+                "name": str(row.name),
                 "parent_id": row.parent_id,
-                "sync_status": row.sync_status,
+                "sync_status": str(row.sync_status),
+                "image_preview_path": self._resolve_sidebar_image_preview_path(
+                    image_local_path=row.image_local_path,
+                    image_path=row.image_path,
+                ),
             }
             for row in rows
         ]
 
     def external_to_local_id_map(self, session: Session) -> dict[int, int]:
         rows = session.execute(
-            select(Category.external_wc_id, Category.id).where(
-                Category.external_wc_id.is_not(None)
-            )
+            select(Category.external_wc_id, Category.id).where(Category.external_wc_id.is_not(None))
         ).all()
         return {int(row.external_wc_id): int(row.id) for row in rows}
+
+    def list_categories_missing_local_image(self, session: Session) -> list[dict[str, Any]]:
+        rows = session.execute(
+            select(Category.id, Category.image_source_url)
+            .where(
+                Category.is_archived.is_(False),
+                Category.image_source_url.is_not(None),
+                (Category.image_local_path.is_(None)) | (Category.image_local_path == ""),
+            )
+            .order_by(Category.id.asc())
+        ).all()
+        return [
+            {
+                "category_id": int(row.id),
+                "source_url": str(row.image_source_url or "").strip(),
+            }
+            for row in rows
+            if str(row.image_source_url or "").strip()
+        ]
+
+    def list_categories_with_local_image(self, session: Session) -> list[dict[str, Any]]:
+        rows = session.execute(
+            select(Category.id, Category.image_source_url, Category.image_local_path)
+            .where(
+                Category.is_archived.is_(False),
+                Category.image_source_url.is_not(None),
+                Category.image_local_path.is_not(None),
+                Category.image_local_path != "",
+            )
+            .order_by(Category.id.asc())
+        ).all()
+        return [
+            {
+                "category_id": int(row.id),
+                "source_url": str(row.image_source_url or "").strip(),
+                "local_path": str(row.image_local_path or "").strip(),
+            }
+            for row in rows
+            if str(row.image_source_url or "").strip() and str(row.image_local_path or "").strip()
+        ]
+
+    def set_category_image_local_path(
+        self,
+        session: Session,
+        *,
+        category_id: int,
+        local_path: str,
+    ) -> bool:
+        category = self.get_by_id(session, category_id)
+        if category is None:
+            return False
+        category.image_local_path = local_path.strip()
+        return True
+
+    def list_existing_category_ids(self, session: Session) -> set[int]:
+        rows = session.execute(select(Category.id)).all()
+        return {int(row.id) for row in rows}
 
     def list_category_options(self, session: Session) -> list[dict]:
         rows = session.execute(
@@ -110,6 +180,8 @@ class CategoryRepository:
             "description": category.description or "",
             "parent_id": category.parent_id,
             "image_paths": self._split_image_paths(category.image_path),
+            "image_source_url": category.image_source_url,
+            "image_local_path": category.image_local_path,
             "sync_status": category.sync_status,
         }
 
@@ -131,12 +203,21 @@ class CategoryRepository:
         final_slug = self._ensure_unique_slug(session, base_slug, exclude_id=None)
         validated_parent_id = self._validate_parent(session, parent_id, current_id=None)
 
+        joined_image_paths = self._join_image_paths(image_paths)
+        source_url, local_path = self._derive_primary_image_fields(
+            image_paths=image_paths or [],
+            current_source_url=None,
+            current_local_path=None,
+        )
+
         category = Category(
             name=normalized_name,
             slug=final_slug,
             description=(description or "").strip() or None,
             parent_id=validated_parent_id,
-            image_path=self._join_image_paths(image_paths),
+            image_path=joined_image_paths,
+            image_source_url=source_url,
+            image_local_path=local_path,
             external_wc_id=None,
             sync_status="new_local",
             is_archived=False,
@@ -167,23 +248,25 @@ class CategoryRepository:
         source_slug = (slug or "").strip() or category.slug or normalized_name
         base_slug = self._normalize_slug(source_slug, fallback="category")
         final_slug = self._ensure_unique_slug(session, base_slug, exclude_id=category.id)
-        validated_parent_id = self._validate_parent(
-            session,
-            parent_id,
-            current_id=category.id,
+        validated_parent_id = self._validate_parent(session, parent_id, current_id=category.id)
+
+        joined_image_paths = self._join_image_paths(image_paths)
+        source_url, local_path = self._derive_primary_image_fields(
+            image_paths=image_paths or [],
+            current_source_url=category.image_source_url,
+            current_local_path=category.image_local_path,
         )
 
         category.name = normalized_name
         category.slug = final_slug
         category.description = (description or "").strip() or None
         category.parent_id = validated_parent_id
-        category.image_path = self._join_image_paths(image_paths)
+        category.image_path = joined_image_paths
+        category.image_source_url = source_url
+        category.image_local_path = local_path
         category.is_archived = False
 
-        if category.external_wc_id is not None and category.sync_status in {
-            "imported",
-            "synced",
-        }:
+        if category.external_wc_id is not None and category.sync_status in {"imported", "synced"}:
             category.sync_status = "modified_local"
 
     def _validate_parent(
@@ -230,9 +313,7 @@ class CategoryRepository:
         *,
         exclude_id: int | None,
     ) -> bool:
-        stmt = select(func.count(Category.id)).where(
-            Category.slug == slug,
-        )
+        stmt = select(func.count(Category.id)).where(Category.slug == slug)
         if exclude_id is not None:
             stmt = stmt.where(Category.id != exclude_id)
         count = session.execute(stmt).scalar_one()
@@ -250,3 +331,42 @@ class CategoryRepository:
         if not cleaned:
             return None
         return "\n".join(cleaned)
+
+    def _is_remote_url(self, value: str) -> bool:
+        lowered = value.strip().lower()
+        return lowered.startswith("http://") or lowered.startswith("https://")
+
+    def _derive_primary_image_fields(
+        self,
+        *,
+        image_paths: list[str],
+        current_source_url: str | None,
+        current_local_path: str | None,
+    ) -> tuple[str | None, str | None]:
+        cleaned = [value.strip() for value in image_paths if value and value.strip()]
+        if not cleaned:
+            return None, None
+
+        primary = cleaned[0]
+        if self._is_remote_url(primary):
+            source_url = primary
+            if (current_source_url or "").strip() == source_url and (current_local_path or "").strip():
+                return source_url, (current_local_path or "").strip()
+            return source_url, None
+        return None, primary
+
+    def _resolve_sidebar_image_preview_path(
+        self,
+        *,
+        image_local_path: str | None,
+        image_path: str | None,
+    ) -> str | None:
+        local = (image_local_path or "").strip()
+        if local:
+            return local
+
+        for value in self._split_image_paths(image_path):
+            if self._is_remote_url(value):
+                continue
+            return value
+        return None
