@@ -62,6 +62,13 @@ Implemented:
 - SQLAlchemy data layer for catalog entities
 - WooCommerce client and initial categories/products import
 - sync run operation log foundation (`sync_runs`)
+- settings dialog with:
+  - WooCommerce credentials editing and saving to `.env`
+  - admin login/password update
+  - safe catalog clear with automatic DB backup
+- login dialog supports:
+  - show password
+  - remember password on this device
 
 Not implemented yet:
 - full WooCommerce sync

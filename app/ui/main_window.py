@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
 
         self._products_page = 1
         self._products_page_size = 50
+        self._selected_category_id: int | None = None
+        self._selected_product_id: int | None = None
+        self._search_query = ""
 
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
@@ -66,7 +69,7 @@ class MainWindow(QMainWindow):
         self.resize(1440, 880)
         self._build_ui()
         self._update_status_bar()
-        self._load_initial_data()
+        self._reload_catalog_view()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -86,19 +89,27 @@ class MainWindow(QMainWindow):
         self.products_table_panel.page_size_changed.connect(
             self._on_products_page_size_changed
         )
+        self.products_table_panel.product_selection_changed.connect(
+            self._on_product_selection_changed
+        )
+        self.products_table_panel.product_double_clicked.connect(
+            self._on_product_double_clicked
+        )
 
         right_layout.addWidget(self.toolbar_panel)
         right_layout.addWidget(self.products_table_panel, stretch=1)
 
         splitter.addWidget(self.categories_panel)
         splitter.addWidget(right_side)
-        splitter.setSizes([320, 1120])
+        splitter.setSizes([340, 1100])
 
         root_layout.addWidget(splitter)
         self.setCentralWidget(root)
 
         self.toolbar_panel.action_triggered.connect(self._handle_toolbar_action)
+        self.toolbar_panel.search_changed.connect(self._on_search_changed)
         self.categories_panel.action_triggered.connect(self._handle_category_action)
+        self.categories_panel.category_selected.connect(self._on_category_selected)
 
     def _update_status_bar(self) -> None:
         role_labels = {
@@ -111,15 +122,24 @@ class MainWindow(QMainWindow):
             f"Выполнен вход: {self._current_user.username} ({role_name})"
         )
 
-    def _load_initial_data(self) -> None:
+    def _reload_catalog_view(self) -> None:
         category_rows = self._catalog_service.get_category_sidebar_items()
-        self.categories_panel.populate(category_rows)
+        valid_category_ids = {int(row["id"]) for row in category_rows if row.get("id") is not None}
+        if self._selected_category_id not in valid_category_ids:
+            self._selected_category_id = None
+        self.categories_panel.populate(
+            category_rows,
+            selected_category_id=self._selected_category_id,
+        )
         self._load_products_page()
 
     def _load_products_page(self) -> None:
+        effective_category_id = None if self._search_query else self._selected_category_id
         page_data = self._catalog_service.get_products_table_page(
             page=self._products_page,
             page_size=self._products_page_size,
+            category_id=effective_category_id,
+            search_query=self._search_query,
         )
         total_pages = int(page_data["total_pages"])
         if self._products_page > total_pages:
@@ -127,6 +147,8 @@ class MainWindow(QMainWindow):
             page_data = self._catalog_service.get_products_table_page(
                 page=self._products_page,
                 page_size=self._products_page_size,
+                category_id=effective_category_id,
+                search_query=self._search_query,
             )
 
         self.products_table_panel.populate_page(
@@ -148,19 +170,56 @@ class MainWindow(QMainWindow):
         self._products_page = 1
         self._load_products_page()
 
+    @Slot(object)
+    def _on_category_selected(self, category_id: object) -> None:
+        self._selected_category_id = int(category_id) if category_id is not None else None
+        self._products_page = 1
+        self._load_products_page()
+
+    @Slot(str)
+    def _on_search_changed(self, search_query: str) -> None:
+        self._search_query = search_query.strip()
+        self._products_page = 1
+        self._load_products_page()
+
+    @Slot(object)
+    def _on_product_selection_changed(self, product_id: object) -> None:
+        self._selected_product_id = int(product_id) if product_id is not None else None
+        if self._selected_product_id is None:
+            return
+
+        product_details = self._catalog_service.get_product_details(self._selected_product_id)
+        if not product_details:
+            return
+
+        category_ids = product_details.get("category_ids") or []
+        if not category_ids:
+            return
+
+        first_category_id = int(category_ids[0])
+        self.categories_panel.select_category(first_category_id, emit_signal=False)
+
+    @Slot(int)
+    def _on_product_double_clicked(self, product_id: int) -> None:
+        self._selected_product_id = product_id
+        self._open_edit_product_dialog()
+
     def _handle_toolbar_action(self, action_key: str) -> None:
         if action_key == "import_wc":
             self._handle_import_from_wc()
             return
-
-        if action_key in {"add_product", "edit_product"}:
-            ProductEditorDialog(self).exec()
+        if action_key == "add_product":
+            self._open_add_product_dialog()
             return
-
+        if action_key == "edit_product":
+            self._open_edit_product_dialog()
+            return
+        if action_key == "delete_product":
+            self._delete_selected_product()
+            return
         if action_key == "settings":
             self._open_settings()
             return
-
         if action_key == "logs":
             OperationLogDialog(
                 operation_log_service=self._operation_log_service,
@@ -168,34 +227,78 @@ class MainWindow(QMainWindow):
             ).exec()
             return
 
-        if action_key == "show_changes":
-            QMessageBox.information(
-                self,
-                "Заглушка Phase 2",
-                "Просмотр изменений будет реализован в одной из следующих фаз.",
-            )
+    def _open_add_product_dialog(self) -> None:
+        category_options = self._catalog_service.get_category_options()
+        dialog = ProductEditorDialog(
+            category_options=category_options,
+            product_data=None,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
             return
 
-        if action_key in {
-            "publish_wc",
-            "archive_product",
-            "bulk_actions",
-            "import_photos",
-            "publish_channel2",
-        }:
-            action_titles = {
-                "publish_wc": "Выгрузить в WooCommerce",
-                "archive_product": "Архивировать товар",
-                "bulk_actions": "Массовые действия",
-                "import_photos": "Импорт фото",
-                "publish_channel2": "Выгрузить в канал 2",
-            }
-            QMessageBox.information(
-                self,
-                "Заглушка Phase 2",
-                f"Действие «{action_titles.get(action_key, action_key)}» подготовлено и будет реализовано позже.",
-            )
+        try:
+            self._catalog_service.create_product(**dialog.result_data)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
             return
+
+        self._products_page = 1
+        self._reload_catalog_view()
+
+    def _open_edit_product_dialog(self) -> None:
+        product_id = self._selected_product_id or self.products_table_panel.selected_product_id()
+        if product_id is None:
+            QMessageBox.information(self, "Товар не выбран", "Выберите товар в таблице.")
+            return
+
+        product_data = self._catalog_service.get_product_details(product_id)
+        if product_data is None:
+            QMessageBox.warning(self, "Ошибка", "Товар не найден.")
+            self._reload_catalog_view()
+            return
+
+        category_options = self._catalog_service.get_category_options()
+        dialog = ProductEditorDialog(
+            category_options=category_options,
+            product_data=product_data,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
+            return
+
+        try:
+            self._catalog_service.update_product(
+                product_id=product_id,
+                **dialog.result_data,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+
+        self._reload_catalog_view()
+
+    def _delete_selected_product(self) -> None:
+        product_id = self._selected_product_id or self.products_table_panel.selected_product_id()
+        if product_id is None:
+            QMessageBox.information(self, "Товар не выбран", "Выберите товар в таблице.")
+            return
+
+        confirmation = QMessageBox.question(
+            self,
+            "Подтверждение удаления",
+            "Удалить выбранный товар из локального каталога (в архив)?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+
+        deleted = self._catalog_service.archive_product(product_id)
+        if not deleted:
+            QMessageBox.warning(self, "Ошибка", "Товар не найден.")
+            return
+        self._reload_catalog_view()
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(
@@ -215,15 +318,18 @@ class MainWindow(QMainWindow):
             self._update_status_bar()
 
         if dialog.catalog_cleared:
+            self._selected_category_id = None
+            self._selected_product_id = None
+            self._search_query = ""
             self._products_page = 1
-            self._load_initial_data()
+            self._reload_catalog_view()
 
     def _handle_import_from_wc(self) -> None:
         if self._import_service is None:
             QMessageBox.warning(
                 self,
                 "Импорт недоступен",
-                "Заполните WooCommerce параметры в .env: "
+                "Заполните параметры WooCommerce в .env: "
                 "FISHOLHA_WC_BASE_URL, FISHOLHA_WC_CONSUMER_KEY, FISHOLHA_WC_CONSUMER_SECRET.",
             )
             return
@@ -283,7 +389,7 @@ class MainWindow(QMainWindow):
 
         self.toolbar_panel.setEnabled(True)
         self._products_page = 1
-        self._load_initial_data()
+        self._reload_catalog_view()
 
         if result.success:
             counters = result.counters
@@ -292,12 +398,12 @@ class MainWindow(QMainWindow):
                 "Импорт завершен",
                 (
                     "Импорт из WooCommerce выполнен успешно.\n\n"
-                    f"Категории: {counters['categories_total']} "
-                    f"(новые: {counters['categories_created']}, обновлены: {counters['categories_updated']})\n"
-                    f"Товары: {counters['products_total']} "
-                    f"(новые: {counters['products_created']}, обновлены: {counters['products_updated']})\n"
-                    f"Связи товар-категория: {counters['product_category_links']}\n"
-                    f"Изображения (URL): {counters['product_images']}"
+                    f"Категории: {counters.get('categories_total', 0)} "
+                    f"(новые: {counters.get('categories_created', 0)}, обновлены: {counters.get('categories_updated', 0)})\n"
+                    f"Товары: {counters.get('products_total', 0)} "
+                    f"(новые: {counters.get('products_created', 0)}, обновлены: {counters.get('products_updated', 0)})\n"
+                    f"Связи товар-категория: {counters.get('product_category_links', 0)}\n"
+                    f"Изображения (URL): {counters.get('product_images', 0)}"
                 ),
             )
             return
@@ -315,17 +421,63 @@ class MainWindow(QMainWindow):
         self._import_worker = None
 
     def _handle_category_action(self, action_key: str) -> None:
-        if action_key in {"add_category", "edit_category", "archive_category"}:
-            CategoryEditorDialog(self).exec()
+        if action_key == "add_category":
+            self._open_add_category_dialog()
+            return
+        if action_key == "edit_category":
+            self._open_edit_category_dialog()
             return
 
-        action_titles = {
-            "add_category": "Добавить категорию",
-            "edit_category": "Изменить категорию",
-            "archive_category": "Архивировать категорию",
-        }
-        QMessageBox.information(
-            self,
-            "Заглушка Phase 2",
-            f"Действие категории «{action_titles.get(action_key, action_key)}» пока не реализовано.",
+    def _open_add_category_dialog(self) -> None:
+        category_options = self._catalog_service.get_category_options()
+        dialog = CategoryEditorDialog(
+            category_options=category_options,
+            category_data=None,
+            parent=self,
         )
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
+            return
+        try:
+            new_category_id = self._catalog_service.create_category(**dialog.result_data)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self._selected_category_id = new_category_id
+        self._products_page = 1
+        self._reload_catalog_view()
+
+    def _open_edit_category_dialog(self) -> None:
+        category_id = self._selected_category_id
+        if category_id is None:
+            QMessageBox.information(
+                self,
+                "Категория не выбрана",
+                "Выберите категорию в левом дереве.",
+            )
+            return
+
+        category_data = self._catalog_service.get_category_details(category_id)
+        if category_data is None:
+            QMessageBox.warning(self, "Ошибка", "Категория не найдена.")
+            self._reload_catalog_view()
+            return
+
+        category_options = self._catalog_service.get_category_options()
+        dialog = CategoryEditorDialog(
+            category_options=category_options,
+            category_data=category_data,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
+            return
+
+        try:
+            self._catalog_service.update_category(
+                category_id=category_id,
+                **dialog.result_data,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+
+        self._reload_catalog_view()

@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 class ProductsTablePanel(QWidget):
     page_changed = Signal(int)
     page_size_changed = Signal(int)
+    product_selection_changed = Signal(object)
+    product_double_clicked = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -31,9 +33,8 @@ class ProductsTablePanel(QWidget):
         group_layout = QVBoxLayout(group)
 
         self.stack = QStackedWidget()
-
         self.empty_state = QLabel(
-            "Товары не загружены.\nИспользуйте «Импорт» для загрузки каталога."
+            "Нет товаров для отображения.\nИзмените фильтр или загрузите каталог."
         )
         self.empty_state.setStyleSheet("color: #5e6c83; font-size: 14px;")
         self.empty_state.setAlignment(Qt.AlignCenter)
@@ -41,22 +42,49 @@ class ProductsTablePanel(QWidget):
         self.table_view = QTableView()
         self.table_view.setAlternatingRowColors(True)
         self.table_view.setSortingEnabled(True)
-        self.model = QStandardItemModel(0, 10)
+        self.table_view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.table_view.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.table_view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self.table_view.verticalHeader().setVisible(False)
+        self.table_view.setShowGrid(False)
+        self.table_view.setStyleSheet(
+            """
+            QTableView {
+                selection-background-color: #d8e7ff;
+                selection-color: #1f2937;
+            }
+            QTableView::item:hover {
+                background-color: #eaf4ff;
+                color: #1f2937;
+            }
+            QTableView::item:selected {
+                background-color: #d8e7ff;
+                color: #1f2937;
+            }
+            QTableView::item:selected:hover {
+                background-color: #cfe3ff;
+                color: #1f2937;
+            }
+            """
+        )
+        self.table_view.doubleClicked.connect(self._emit_double_click)
+
+        self.model = QStandardItemModel(0, 7)
         self.model.setHorizontalHeaderLabels(
             [
-                "Выбор",
-                "Фото",
                 "Название",
-                "Категория",
-                "SKU",
                 "Цена",
                 "Ед. изм.",
-                "Статус синхронизации",
-                "Обновлено",
-                "Видимость",
+                "SKU",
+                "Статус",
+                "Категории",
+                "Sync",
             ]
         )
         self.table_view.setModel(self.model)
+        self.table_view.selectionModel().selectionChanged.connect(
+            self._on_selection_changed
+        )
 
         empty_page = QWidget()
         empty_layout = QVBoxLayout(empty_page)
@@ -107,6 +135,16 @@ class ProductsTablePanel(QWidget):
     def current_page_size(self) -> int:
         return int(self.page_size_combo.currentText())
 
+    def selected_product_id(self) -> int | None:
+        current_index = self.table_view.currentIndex()
+        if not current_index.isValid():
+            return None
+        model_item = self.model.item(current_index.row(), 0)
+        if model_item is None:
+            return None
+        product_id = model_item.data(Qt.ItemDataRole.UserRole)
+        return int(product_id) if product_id is not None else None
+
     def populate_page(
         self,
         *,
@@ -116,6 +154,7 @@ class ProductsTablePanel(QWidget):
         total_items: int,
         total_pages: int,
     ) -> None:
+        self.table_view.setSortingEnabled(False)
         self.model.removeRows(0, self.model.rowCount())
         self._current_page = max(1, page)
         self._total_pages = max(1, total_pages)
@@ -125,22 +164,19 @@ class ProductsTablePanel(QWidget):
             self.page_info_label.setText("Страница 1 из 1 · Всего: 0")
             self.prev_button.setEnabled(False)
             self.next_button.setEnabled(False)
+            self.product_selection_changed.emit(None)
+            self.table_view.setSortingEnabled(True)
             return
 
         for row in rows:
-            sync_status = self._sync_status_label(str(row.get("sync_status", "")))
-            visibility = self._visibility_label(str(row.get("published_state", "")))
             items = [
-                QStandardItem(""),
-                QStandardItem(""),
-                QStandardItem(str(row.get("name", ""))),
-                QStandardItem(str(row.get("category_name", ""))),
-                QStandardItem(str(row.get("sku", ""))),
-                QStandardItem(str(row.get("price", ""))),
-                QStandardItem(str(row.get("price_unit", ""))),
-                QStandardItem(sync_status),
-                QStandardItem(str(row.get("updated_at", ""))),
-                QStandardItem(visibility),
+                self._item(str(row.get("name", "")), user_data=row.get("id")),
+                self._item(self._price_label(row.get("price"))),
+                self._item(str(row.get("price_unit", ""))),
+                self._item(str(row.get("sku", ""))),
+                self._item(self._status_label(str(row.get("status", "")))),
+                self._item(str(row.get("categories", ""))),
+                self._item(self._sync_status_label(str(row.get("sync_status", "")))),
             ]
             self.model.appendRow(items)
 
@@ -158,6 +194,16 @@ class ProductsTablePanel(QWidget):
         self.prev_button.setEnabled(self._current_page > 1)
         self.next_button.setEnabled(self._current_page < self._total_pages)
         self.stack.setCurrentIndex(1)
+        self.table_view.resizeColumnsToContents()
+        self.table_view.setSortingEnabled(True)
+        self.table_view.clearSelection()
+        self.product_selection_changed.emit(None)
+
+    def _item(self, text: str, user_data: object | None = None) -> QStandardItem:
+        item = QStandardItem(text)
+        if user_data is not None:
+            item.setData(user_data, Qt.ItemDataRole.UserRole)
+        return item
 
     def _on_page_size_changed(self, value: str) -> None:
         self.page_size_changed.emit(int(value))
@@ -169,6 +215,19 @@ class ProductsTablePanel(QWidget):
     def _go_next(self) -> None:
         if self._current_page < self._total_pages:
             self.page_changed.emit(self._current_page + 1)
+
+    def _on_selection_changed(self, *_args: object) -> None:
+        self.product_selection_changed.emit(self.selected_product_id())
+
+    def _emit_double_click(self, _index: object) -> None:
+        product_id = self.selected_product_id()
+        if product_id is not None:
+            self.product_double_clicked.emit(product_id)
+
+    def _price_label(self, value: object) -> str:
+        if value is None:
+            return ""
+        return str(value)
 
     def _sync_status_label(self, status: str) -> str:
         labels = {
@@ -182,11 +241,11 @@ class ProductsTablePanel(QWidget):
         }
         return labels.get(status, status)
 
-    def _visibility_label(self, state: str) -> str:
+    def _status_label(self, status: str) -> str:
         labels = {
             "draft": "черновик",
             "visible": "видимый",
             "hidden": "скрытый",
             "published": "опубликован",
         }
-        return labels.get(state, state)
+        return labels.get(status, status)

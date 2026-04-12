@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -104,27 +106,23 @@ class ProductRepository:
         *,
         page: int,
         page_size: int,
+        category_id: int | None = None,
+        search_query: str = "",
     ) -> tuple[list[dict], int]:
         safe_page = max(1, page)
         safe_page_size = max(1, page_size)
+        normalized_search = search_query.strip()
 
-        total_items = int(
-            session.execute(
-                select(func.count(Product.id)).where(Product.is_archived.is_(False))
-            ).scalar_one()
-        )
-
-        offset = (safe_page - 1) * safe_page_size
-        rows = session.execute(
+        stmt = (
             select(
                 Product.id,
                 Product.name,
                 Product.sku,
                 Product.price,
                 Product.price_unit,
+                Product.published_state,
                 Product.sync_status,
                 Product.updated_at,
-                Product.published_state,
                 func.group_concat(func.distinct(Category.name)).label("categories"),
             )
             .select_from(Product)
@@ -135,26 +133,231 @@ class ProductRepository:
             )
             .join(Category, ProductCategoryLink.category_id == Category.id, isouter=True)
             .where(Product.is_archived.is_(False))
-            .group_by(Product.id)
-            .order_by(Product.updated_at.desc())
-            .offset(offset)
-            .limit(safe_page_size)
+        )
+        if category_id is not None:
+            stmt = stmt.where(
+                Product.id.in_(
+                    select(ProductCategoryLink.product_id).where(
+                        ProductCategoryLink.category_id == category_id
+                    )
+                )
+            )
+
+        rows = session.execute(
+            stmt.group_by(Product.id).order_by(Product.updated_at.desc(), Product.id.desc())
         ).all()
-        items = [
+
+        all_items = [
             {
                 "id": row.id,
                 "name": row.name,
                 "sku": row.sku,
                 "price": row.price,
                 "price_unit": row.price_unit,
+                "status": row.published_state,
                 "sync_status": row.sync_status,
+                "categories": row.categories or "",
                 "updated_at": row.updated_at,
-                "published_state": row.published_state,
-                "category_name": row.categories or "",
             }
             for row in rows
         ]
+
+        filtered_items = [
+            item
+            for item in all_items
+            if self._matches_search(
+                normalized_search,
+                [
+                    str(item.get("name", "")),
+                    str(item.get("sku", "")),
+                    str(item.get("categories", "")),
+                ],
+            )
+        ]
+        total_items = len(filtered_items)
+        offset = (safe_page - 1) * safe_page_size
+        paged_items = filtered_items[offset : offset + safe_page_size]
+        items = [
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "sku": item["sku"],
+                "price": item["price"],
+                "price_unit": item["price_unit"],
+                "status": item["status"],
+                "sync_status": item["sync_status"],
+                "categories": item["categories"],
+            }
+            for item in paged_items
+        ]
         return items, total_items
+
+    def get_product_details(self, session: Session, product_id: int) -> dict | None:
+        product = session.scalar(
+            select(Product).where(
+                Product.id == product_id,
+                Product.is_archived.is_(False),
+            )
+        )
+        if product is None:
+            return None
+
+        category_rows = session.execute(
+            select(ProductCategoryLink.category_id).where(
+                ProductCategoryLink.product_id == product.id
+            )
+        ).all()
+        image_rows = session.execute(
+            select(ProductImage.original_path)
+            .where(ProductImage.product_id == product.id)
+            .order_by(ProductImage.sort_order.asc(), ProductImage.id.asc())
+        ).all()
+
+        return {
+            "id": int(product.id),
+            "name": product.name,
+            "description": product.description or "",
+            "price": str(product.price) if product.price is not None else "",
+            "price_unit": product.price_unit or "",
+            "sku": product.sku or "",
+            "status": product.published_state,
+            "sync_status": product.sync_status,
+            "category_ids": [int(row.category_id) for row in category_rows],
+            "image_urls": [str(row.original_path) for row in image_rows if row.original_path],
+        }
+
+    def create_product(
+        self,
+        session: Session,
+        *,
+        name: str,
+        description: str | None,
+        price: str | Decimal | None,
+        price_unit: str | None,
+        sku: str | None,
+        category_ids: list[int],
+        image_urls: list[str],
+    ) -> int:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Название товара не может быть пустым.")
+
+        self._validate_unique_sku(session, sku=sku, exclude_product_id=None)
+
+        base_slug = self._normalize_slug(normalized_name, fallback="product")
+        slug = self._ensure_unique_slug(session, base_slug, exclude_product_id=None)
+
+        normalized_price = self._to_decimal(price)
+        normalized_description = (description or "").strip() or None
+        normalized_sku = (sku or "").strip() or None
+        normalized_price_unit = (price_unit or "").strip() or None
+
+        product = Product(
+            name=normalized_name,
+            slug=slug,
+            sku=normalized_sku,
+            description=normalized_description,
+            short_description=None,
+            price=normalized_price,
+            regular_price=normalized_price,
+            sale_price=None,
+            price_unit=normalized_price_unit,
+            is_featured=False,
+            visibility="visible",
+            published_state="draft",
+            sync_status="new_local",
+            external_wc_id=None,
+            is_archived=False,
+        )
+        session.add(product)
+        session.flush()
+
+        self.replace_category_links(
+            session,
+            product_id=int(product.id),
+            category_ids=category_ids,
+        )
+        self._replace_images_from_urls(
+            session,
+            product_id=int(product.id),
+            image_urls=image_urls,
+        )
+        return int(product.id)
+
+    def update_product(
+        self,
+        session: Session,
+        *,
+        product_id: int,
+        name: str,
+        description: str | None,
+        price: str | Decimal | None,
+        price_unit: str | None,
+        sku: str | None,
+        category_ids: list[int],
+        image_urls: list[str],
+    ) -> None:
+        product = session.scalar(
+            select(Product).where(
+                Product.id == product_id,
+                Product.is_archived.is_(False),
+            )
+        )
+        if product is None:
+            raise ValueError("Товар не найден.")
+
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Название товара не может быть пустым.")
+
+        self._validate_unique_sku(
+            session,
+            sku=sku,
+            exclude_product_id=int(product.id),
+        )
+        if not product.slug:
+            base_slug = self._normalize_slug(normalized_name, fallback="product")
+            product.slug = self._ensure_unique_slug(
+                session,
+                base_slug,
+                exclude_product_id=int(product.id),
+            )
+
+        product.name = normalized_name
+        product.description = (description or "").strip() or None
+        product.price = self._to_decimal(price)
+        product.regular_price = product.price
+        product.price_unit = (price_unit or "").strip() or None
+        product.sku = (sku or "").strip() or None
+        product.is_archived = False
+        product.published_state = product.published_state or "draft"
+        if product.sync_status != "new_local":
+            product.sync_status = "modified_local"
+
+        self.replace_category_links(
+            session,
+            product_id=int(product.id),
+            category_ids=category_ids,
+        )
+        self._replace_images_from_urls(
+            session,
+            product_id=int(product.id),
+            image_urls=image_urls,
+        )
+
+    def archive_product(self, session: Session, product_id: int) -> bool:
+        product = session.scalar(
+            select(Product).where(
+                Product.id == product_id,
+                Product.is_archived.is_(False),
+            )
+        )
+        if product is None:
+            return False
+        product.is_archived = True
+        if product.external_wc_id is not None:
+            product.sync_status = "archived"
+        return True
 
     def _extract_price_unit(self, meta_data: Any) -> str | None:
         if not isinstance(meta_data, list):
@@ -177,3 +380,104 @@ class ProductRepository:
             return Decimal(value)
         except (InvalidOperation, ValueError):
             return None
+
+    def _replace_images_from_urls(
+        self,
+        session: Session,
+        *,
+        product_id: int,
+        image_urls: list[str],
+    ) -> None:
+        prepared: list[dict[str, Any]] = []
+        for index, url in enumerate(image_urls):
+            normalized = url.strip()
+            if not normalized:
+                continue
+            prepared.append(
+                {
+                    "src": normalized,
+                    "position": index,
+                }
+            )
+        self.replace_images_from_wc_payload(
+            session,
+            product_id=product_id,
+            images=prepared,
+        )
+
+    def _normalize_slug(self, value: str, *, fallback: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+        return normalized or fallback
+
+    def _ensure_unique_slug(
+        self,
+        session: Session,
+        base_slug: str,
+        *,
+        exclude_product_id: int | None,
+    ) -> str:
+        candidate = base_slug
+        suffix = 2
+        while self._slug_exists(
+            session,
+            slug=candidate,
+            exclude_product_id=exclude_product_id,
+        ):
+            candidate = f"{base_slug}-{suffix}"
+            suffix += 1
+        return candidate
+
+    def _slug_exists(
+        self,
+        session: Session,
+        *,
+        slug: str,
+        exclude_product_id: int | None,
+    ) -> bool:
+        stmt = select(func.count(Product.id)).where(Product.slug == slug)
+        if exclude_product_id is not None:
+            stmt = stmt.where(Product.id != exclude_product_id)
+        count = session.execute(stmt).scalar_one()
+        return int(count) > 0
+
+    def _validate_unique_sku(
+        self,
+        session: Session,
+        *,
+        sku: str | None,
+        exclude_product_id: int | None,
+    ) -> None:
+        normalized_sku = (sku or "").strip()
+        if not normalized_sku:
+            return
+        stmt = select(func.count(Product.id)).where(Product.sku == normalized_sku)
+        if exclude_product_id is not None:
+            stmt = stmt.where(Product.id != exclude_product_id)
+        count = session.execute(stmt).scalar_one()
+        if int(count) > 0:
+            raise ValueError("Товар с таким SKU уже существует.")
+
+    def _matches_search(self, query: str, fields: list[str]) -> bool:
+        normalized_query = query.strip().lower()
+        if not normalized_query:
+            return True
+
+        query_compact = self._compact_text(normalized_query)
+        for field in fields:
+            lowered = field.lower()
+            if normalized_query in lowered:
+                return True
+            compact_field = self._compact_text(lowered)
+            if query_compact and query_compact in compact_field:
+                return True
+
+            words = [word for word in compact_field.split(" ") if word]
+            for word in words:
+                ratio = difflib.SequenceMatcher(None, query_compact, word).ratio()
+                if ratio >= 0.8:
+                    return True
+        return False
+
+    def _compact_text(self, text: str) -> str:
+        normalized = re.sub(r"[^a-zа-я0-9]+", " ", text.lower(), flags=re.IGNORECASE)
+        return " ".join(normalized.split())

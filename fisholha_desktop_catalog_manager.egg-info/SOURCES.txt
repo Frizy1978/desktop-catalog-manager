@@ -4,6 +4,7 @@ app/__init__.py
 app/bootstrap.py
 app/core/__init__.py
 app/core/database.py
+app/core/logging_config.py
 app/core/paths.py
 app/core/security.py
 app/core/settings.py
@@ -33,7 +34,11 @@ app/repositories/product_repository.py
 app/repositories/sync_run_repository.py
 app/services/__init__.py
 app/services/auth_service.py
+app/services/catalog_maintenance_service.py
 app/services/catalog_service.py
+app/services/env_config_service.py
+app/services/login_memory_service.py
+app/services/operation_log_service.py
 app/services/sync_import_service.py
 app/ui/__init__.py
 app/ui/icons.py
@@ -49,6 +54,8 @@ app/ui/widgets/__init__.py
 app/ui/widgets/categories_panel.py
 app/ui/widgets/products_table_panel.py
 app/ui/widgets/toolbar_panel.py
+app/ui/workers/__init__.py
+app/ui/workers/import_worker.py
 fisholha_desktop_catalog_manager.egg-info/PKG-INFO
 fisholha_desktop_catalog_manager.egg-info/SOURCES.txt
 fisholha_desktop_catalog_manager.egg-info/dependency_links.txt
