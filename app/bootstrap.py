@@ -13,6 +13,7 @@ from app.integrations.woocommerce_client import WooCommerceClient, WooCommerceCl
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.catalog_repository import CatalogRepository
 from app.repositories.category_repository import CategoryRepository
+from app.repositories.publish_job_repository import PublishJobRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.product_image_repository import ProductImageRepository
 from app.repositories.sync_run_repository import SyncRunRepository
@@ -22,6 +23,7 @@ from app.services.catalog_service import CatalogService
 from app.services.env_config_service import EnvConfigService
 from app.services.login_memory_service import LoginMemoryService
 from app.services.operation_log_service import OperationLogService
+from app.services.publish_service import WooCommercePublishService
 from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import WooCommerceImportService
 from app.services.wc_image_download_service import WooImageDownloadService
@@ -69,6 +71,7 @@ def run() -> int:
         media_root=settings.media_dir,
     )
     sync_run_repository = SyncRunRepository(database=orm_database)
+    publish_job_repository = PublishJobRepository(database=orm_database)
     operation_log_service = OperationLogService(repository=sync_run_repository)
 
     import_service_factory = lambda: _build_import_service(
@@ -76,6 +79,12 @@ def run() -> int:
         sync_run_repository=sync_run_repository,
     )
     import_service = import_service_factory()
+    publish_service_factory = lambda: _build_publish_service(
+        orm_database=orm_database,
+        sync_run_repository=sync_run_repository,
+        publish_job_repository=publish_job_repository,
+    )
+    publish_service = publish_service_factory()
 
     application = QApplication(sys.argv)
     apply_styles(application)
@@ -102,6 +111,8 @@ def run() -> int:
         product_image_service=product_image_service,
         import_service_factory=import_service_factory,
         import_service=import_service,
+        publish_service_factory=publish_service_factory,
+        publish_service=publish_service,
     )
     if not logo_icon.isNull():
         window.setWindowIcon(logo_icon)
@@ -146,4 +157,37 @@ def _build_import_service(
         sync_run_repository=sync_run_repository,
         wc_client=wc_client,
         image_download_service=image_download_service,
+    )
+
+
+def _build_publish_service(
+    *,
+    orm_database: SqlAlchemyDatabase,
+    sync_run_repository: SyncRunRepository,
+    publish_job_repository: PublishJobRepository,
+) -> WooCommercePublishService | None:
+    settings = AppSettings.load()
+    if not (
+        settings.wc_base_url
+        and settings.wc_consumer_key
+        and settings.wc_consumer_secret
+    ):
+        return None
+
+    wc_client = WooCommerceClient(
+        WooCommerceClientConfig(
+            base_url=settings.wc_base_url,
+            consumer_key=settings.wc_consumer_key,
+            consumer_secret=settings.wc_consumer_secret,
+            timeout_seconds=settings.wc_timeout_seconds,
+            verify_ssl=settings.wc_verify_ssl,
+        )
+    )
+    return WooCommercePublishService(
+        database=orm_database,
+        category_repository=CategoryRepository(),
+        product_repository=ProductRepository(),
+        sync_run_repository=sync_run_repository,
+        publish_job_repository=publish_job_repository,
+        wc_client=wc_client,
     )

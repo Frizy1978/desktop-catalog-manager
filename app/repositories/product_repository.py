@@ -36,7 +36,7 @@ class ProductRepository:
         product.is_featured = bool(payload.get("featured", False))
         product.visibility = str(payload.get("catalog_visibility") or "visible")
         product.published_state = str(payload.get("status") or "draft")
-        product.sync_status = "imported"
+        product.sync_status = "synced"
         product.is_archived = False
         return product, created
 
@@ -230,12 +230,7 @@ class ProductRepository:
         return items, total_items
 
     def get_product_details(self, session: Session, product_id: int) -> dict | None:
-        product = session.scalar(
-            select(Product).where(
-                Product.id == product_id,
-                Product.is_archived.is_(False),
-            )
-        )
+        product = self._get_active_product(session, product_id)
         if product is None:
             return None
 
@@ -335,12 +330,7 @@ class ProductRepository:
         category_ids: list[int],
         image_urls: list[str] | None = None,
     ) -> None:
-        product = session.scalar(
-            select(Product).where(
-                Product.id == product_id,
-                Product.is_archived.is_(False),
-            )
-        )
+        product = self._get_active_product(session, product_id)
         if product is None:
             raise ValueError("Товар не найден.")
 
@@ -385,17 +375,117 @@ class ProductRepository:
             )
 
     def archive_product(self, session: Session, product_id: int) -> bool:
-        product = session.scalar(
-            select(Product).where(
-                Product.id == product_id,
-                Product.is_archived.is_(False),
-            )
-        )
+        product = self._get_active_product(session, product_id)
         if product is None:
             return False
         product.is_archived = True
         if product.external_wc_id is not None:
             product.sync_status = "archived"
+        return True
+
+    def list_products_for_publish(self, session: Session) -> list[dict[str, Any]]:
+        rows = session.execute(
+            select(
+                Product.id,
+                Product.name,
+                Product.slug,
+                Product.sku,
+                Product.description,
+                Product.short_description,
+                Product.price,
+                Product.regular_price,
+                Product.sale_price,
+                Product.price_unit,
+                Product.visibility,
+                Product.published_state,
+                Product.external_wc_id,
+                Product.sync_status,
+            )
+            .where(
+                Product.is_archived.is_(False),
+                Product.sync_status.in_(
+                    ["new_local", "modified_local", "publish_error", "publish_pending"]
+                ),
+            )
+            .order_by(Product.id.asc())
+        ).all()
+        return [
+            {
+                "id": int(row.id),
+                "name": str(row.name or ""),
+                "slug": str(row.slug or ""),
+                "sku": str(row.sku or "").strip() or None,
+                "description": str(row.description or "").strip(),
+                "short_description": str(row.short_description or "").strip(),
+                "price": row.price,
+                "regular_price": row.regular_price,
+                "sale_price": row.sale_price,
+                "price_unit": str(row.price_unit or "").strip() or None,
+                "visibility": str(row.visibility or "visible"),
+                "published_state": str(row.published_state or "draft"),
+                "external_wc_id": int(row.external_wc_id)
+                if row.external_wc_id is not None
+                else None,
+                "sync_status": str(row.sync_status or ""),
+            }
+            for row in rows
+        ]
+
+    def get_product_category_wc_ids(
+        self,
+        session: Session,
+        *,
+        product_id: int,
+    ) -> tuple[list[int], list[int]]:
+        rows = session.execute(
+            select(Category.id, Category.external_wc_id)
+            .join(
+                ProductCategoryLink,
+                ProductCategoryLink.category_id == Category.id,
+            )
+            .where(
+                ProductCategoryLink.product_id == product_id,
+                Category.is_archived.is_(False),
+            )
+            .order_by(Category.id.asc())
+        ).all()
+        wc_ids: list[int] = []
+        missing_local_ids: list[int] = []
+        for row in rows:
+            local_category_id = int(row.id)
+            if row.external_wc_id is None:
+                missing_local_ids.append(local_category_id)
+                continue
+            wc_ids.append(int(row.external_wc_id))
+        return sorted(set(wc_ids)), sorted(set(missing_local_ids))
+
+    def set_publish_pending(self, session: Session, product_id: int) -> bool:
+        product = self._get_active_product(session, product_id)
+        if product is None:
+            return False
+        product.sync_status = "publish_pending"
+        return True
+
+    def mark_publish_success(
+        self,
+        session: Session,
+        *,
+        product_id: int,
+        external_wc_id: int,
+    ) -> bool:
+        product = self._get_active_product(session, product_id)
+        if product is None:
+            return False
+        product.external_wc_id = int(external_wc_id)
+        product.sync_status = "synced"
+        product.is_archived = False
+        return True
+
+    def mark_publish_error(self, session: Session, product_id: int) -> bool:
+        product = self._get_active_product(session, product_id)
+        if product is None:
+            return False
+        product.sync_status = "publish_error"
         return True
 
     def _extract_price_unit(self, meta_data: Any) -> str | None:
@@ -518,5 +608,13 @@ class ProductRepository:
         return False
 
     def _compact_text(self, text: str) -> str:
-        normalized = re.sub(r"[^a-zа-я0-9]+", " ", text.lower(), flags=re.IGNORECASE)
+        normalized = re.sub(r"[^0-9a-zа-я]+", " ", text.lower(), flags=re.IGNORECASE)
         return " ".join(normalized.split())
+
+    def _get_active_product(self, session: Session, product_id: int) -> Product | None:
+        return session.scalar(
+            select(Product).where(
+                Product.id == product_id,
+                Product.is_archived.is_(False),
+            )
+        )

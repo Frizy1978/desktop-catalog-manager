@@ -19,6 +19,7 @@ from app.services.catalog_maintenance_service import CatalogMaintenanceService
 from app.services.catalog_service import CatalogService
 from app.services.env_config_service import EnvConfigService
 from app.services.operation_log_service import OperationLogService
+from app.services.publish_service import PublishRunResult, WooCommercePublishService
 from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import ImportRunResult, WooCommerceImportService
 from app.ui.dialogs.category_editor_dialog import CategoryEditorDialog
@@ -29,6 +30,7 @@ from app.ui.widgets.categories_panel import CategoriesPanel
 from app.ui.widgets.products_table_panel import ProductsTablePanel
 from app.ui.widgets.toolbar_panel import ToolbarPanel
 from app.ui.workers.import_worker import ImportWorker
+from app.ui.workers.publish_worker import PublishWorker
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,8 @@ class MainWindow(QMainWindow):
         product_image_service: ProductImageService,
         import_service_factory: Callable[[], WooCommerceImportService | None],
         import_service: WooCommerceImportService | None = None,
+        publish_service_factory: Callable[[], WooCommercePublishService | None] | None = None,
+        publish_service: WooCommercePublishService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -57,6 +61,8 @@ class MainWindow(QMainWindow):
         self._product_image_service = product_image_service
         self._import_service_factory = import_service_factory
         self._import_service = import_service
+        self._publish_service_factory = publish_service_factory
+        self._publish_service = publish_service
 
         self._products_page = 1
         self._products_page_size = 50
@@ -67,6 +73,9 @@ class MainWindow(QMainWindow):
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
         self._import_progress_dialog: QProgressDialog | None = None
+        self._publish_thread: QThread | None = None
+        self._publish_worker: PublishWorker | None = None
+        self._publish_progress_dialog: QProgressDialog | None = None
 
         self.setWindowTitle("Fish Olha — Менеджер каталога")
         self.resize(1440, 880)
@@ -210,6 +219,9 @@ class MainWindow(QMainWindow):
     def _handle_toolbar_action(self, action_key: str) -> None:
         if action_key == "import_wc":
             self._handle_import_from_wc()
+            return
+        if action_key == "publish_wc":
+            self._handle_publish_to_wc()
             return
         if action_key == "add_product":
             self._open_add_product_dialog()
@@ -360,6 +372,8 @@ class MainWindow(QMainWindow):
 
         if dialog.wc_settings_changed:
             self._import_service = self._import_service_factory()
+            if self._publish_service_factory is not None:
+                self._publish_service = self._publish_service_factory()
 
         if dialog.updated_admin_username:
             self._current_user.username = dialog.updated_admin_username
@@ -387,6 +401,14 @@ class MainWindow(QMainWindow):
                 self,
                 "Импорт уже выполняется",
                 "Подождите завершения текущего импорта.",
+            )
+            return
+
+        if self._publish_thread is not None and self._publish_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция недоступна",
+                "Дождитесь завершения текущей публикации.",
             )
             return
 
@@ -419,6 +441,61 @@ class MainWindow(QMainWindow):
         self._import_thread.finished.connect(self._on_import_thread_finished)
         self._import_thread.finished.connect(self._import_thread.deleteLater)
         self._import_thread.start()
+
+    def _handle_publish_to_wc(self) -> None:
+        if self._publish_service is None:
+            QMessageBox.warning(
+                self,
+                "Публикация недоступна",
+                "Заполните параметры WooCommerce в .env: "
+                "FISHOLHA_WC_BASE_URL, FISHOLHA_WC_CONSUMER_KEY, FISHOLHA_WC_CONSUMER_SECRET.",
+            )
+            return
+
+        if self._import_thread is not None and self._import_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Операция недоступна",
+                "Дождитесь завершения текущего импорта.",
+            )
+            return
+        if self._publish_thread is not None and self._publish_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Публикация уже выполняется",
+                "Дождитесь завершения текущей публикации.",
+            )
+            return
+
+        self.toolbar_panel.setEnabled(False)
+        self._publish_progress_dialog = QProgressDialog(
+            "Подготовка публикации...",
+            "",
+            0,
+            100,
+            self,
+        )
+        self._publish_progress_dialog.setWindowTitle("Публикация в WooCommerce")
+        self._publish_progress_dialog.setWindowModality(Qt.ApplicationModal)
+        self._publish_progress_dialog.setCancelButton(None)
+        self._publish_progress_dialog.setAutoClose(False)
+        self._publish_progress_dialog.setAutoReset(False)
+        self._publish_progress_dialog.setMinimumDuration(0)
+        self._publish_progress_dialog.setValue(0)
+        self._publish_progress_dialog.show()
+
+        self._publish_thread = QThread(self)
+        self._publish_worker = PublishWorker(self._publish_service)
+        self._publish_worker.moveToThread(self._publish_thread)
+
+        self._publish_thread.started.connect(self._publish_worker.run)
+        self._publish_worker.progress_changed.connect(self._on_publish_progress)
+        self._publish_worker.publish_finished.connect(self._on_publish_finished)
+        self._publish_worker.publish_finished.connect(self._publish_thread.quit)
+        self._publish_worker.publish_finished.connect(self._publish_worker.deleteLater)
+        self._publish_thread.finished.connect(self._on_publish_thread_finished)
+        self._publish_thread.finished.connect(self._publish_thread.deleteLater)
+        self._publish_thread.start()
 
     @Slot(int, str)
     def _on_import_progress(self, percent: int, message: str) -> None:
@@ -467,6 +544,64 @@ class MainWindow(QMainWindow):
     def _on_import_thread_finished(self) -> None:
         self._import_thread = None
         self._import_worker = None
+
+    @Slot(int, str)
+    def _on_publish_progress(self, percent: int, message: str) -> None:
+        if self._publish_progress_dialog is None:
+            return
+        self._publish_progress_dialog.setLabelText(message)
+        self._publish_progress_dialog.setValue(percent)
+
+    @Slot(object)
+    def _on_publish_finished(self, result_object: object) -> None:
+        result = cast(PublishRunResult, result_object)
+        if self._publish_progress_dialog is not None:
+            self._publish_progress_dialog.setValue(100)
+            self._publish_progress_dialog.close()
+            self._publish_progress_dialog = None
+
+        self.toolbar_panel.setEnabled(True)
+        self._products_page = 1
+        self._reload_catalog_view()
+
+        if result.success:
+            counters = result.counters
+            QMessageBox.information(
+                self,
+                "Публикация завершена",
+                (
+                    "Публикация в WooCommerce выполнена успешно.\n\n"
+                    f"Категории: {counters.get('categories_total', 0)} "
+                    f"(создано: {counters.get('categories_created', 0)}, "
+                    f"обновлено: {counters.get('categories_updated', 0)}, "
+                    f"ошибок: {counters.get('categories_failed', 0)})\n"
+                    f"Товары: {counters.get('products_total', 0)} "
+                    f"(создано: {counters.get('products_created', 0)}, "
+                    f"обновлено: {counters.get('products_updated', 0)}, "
+                    f"ошибок: {counters.get('products_failed', 0)})"
+                ),
+            )
+            return
+
+        logger.error(
+            "Publish to WooCommerce finished with errors: %s",
+            "; ".join(result.errors),
+        )
+        shown_errors = result.errors[:20]
+        hidden_count = max(0, len(result.errors) - len(shown_errors))
+        details_text = "\n".join(shown_errors)
+        if hidden_count > 0:
+            details_text += f"\n... и ещё {hidden_count} ошибок"
+        QMessageBox.critical(
+            self,
+            "Ошибка публикации",
+            "Публикация завершилась с ошибками:\n" + details_text,
+        )
+
+    @Slot()
+    def _on_publish_thread_finished(self) -> None:
+        self._publish_thread = None
+        self._publish_worker = None
 
     def _handle_category_action(self, action_key: str) -> None:
         if action_key == "add_category":

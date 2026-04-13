@@ -37,7 +37,7 @@ class CategoryRepository:
         elif previous_source_url != source_url:
             category.image_local_path = None
 
-        category.sync_status = "imported"
+        category.sync_status = "synced"
         category.is_archived = False
         return category, created
 
@@ -153,6 +153,82 @@ class CategoryRepository:
         rows = session.execute(select(Category.id)).all()
         return {int(row.id) for row in rows}
 
+    def list_categories_for_publish(self, session: Session) -> list[dict[str, Any]]:
+        rows = session.execute(
+            select(
+                Category.id,
+                Category.name,
+                Category.slug,
+                Category.description,
+                Category.parent_id,
+                Category.external_wc_id,
+                Category.sync_status,
+            )
+            .where(
+                Category.is_archived.is_(False),
+                Category.sync_status.in_(
+                    ["new_local", "modified_local", "publish_error", "publish_pending"]
+                ),
+            )
+            .order_by(Category.id.asc())
+        ).all()
+        return [
+            {
+                "id": int(row.id),
+                "name": str(row.name or ""),
+                "slug": str(row.slug or ""),
+                "description": str(row.description or "").strip(),
+                "parent_id": int(row.parent_id) if row.parent_id is not None else None,
+                "external_wc_id": int(row.external_wc_id)
+                if row.external_wc_id is not None
+                else None,
+                "sync_status": str(row.sync_status or ""),
+            }
+            for row in rows
+        ]
+
+    def category_wc_mapping_by_local_id(self, session: Session) -> dict[int, int]:
+        rows = session.execute(
+            select(Category.id, Category.external_wc_id).where(
+                Category.is_archived.is_(False),
+                Category.external_wc_id.is_not(None),
+            )
+        ).all()
+        return {
+            int(row.id): int(row.external_wc_id)
+            for row in rows
+            if row.external_wc_id is not None
+        }
+
+    def set_publish_pending(self, session: Session, category_id: int) -> bool:
+        category = self.get_by_id(session, category_id)
+        if category is None:
+            return False
+        category.sync_status = "publish_pending"
+        return True
+
+    def mark_publish_success(
+        self,
+        session: Session,
+        *,
+        category_id: int,
+        external_wc_id: int,
+    ) -> bool:
+        category = self.get_by_id(session, category_id)
+        if category is None:
+            return False
+        category.external_wc_id = int(external_wc_id)
+        category.sync_status = "synced"
+        category.is_archived = False
+        return True
+
+    def mark_publish_error(self, session: Session, category_id: int) -> bool:
+        category = self.get_by_id(session, category_id)
+        if category is None:
+            return False
+        category.sync_status = "publish_error"
+        return True
+
     def list_category_options(self, session: Session) -> list[dict]:
         rows = session.execute(
             select(Category.id, Category.name)
@@ -266,7 +342,7 @@ class CategoryRepository:
         category.image_local_path = local_path
         category.is_archived = False
 
-        if category.external_wc_id is not None and category.sync_status in {"imported", "synced"}:
+        if category.sync_status != "new_local":
             category.sync_status = "modified_local"
 
     def _validate_parent(

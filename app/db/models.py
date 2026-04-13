@@ -165,3 +165,16 @@ class SyncRun(Base):
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="pending")
     counters_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     errors_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class PublishJob(Base):
+    __tablename__ = "publish_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=func.now()
+    )
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="pending")
+    target: Mapped[str] = mapped_column(String(64), nullable=False)
+    entities_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

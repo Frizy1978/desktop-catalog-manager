@@ -20,6 +20,7 @@ class ToolbarPanel(QWidget):
         layout.setSpacing(8)
 
         self._add_primary_button(layout, "Загрузить", "import_wc")
+        self._add_primary_button(layout, "Выгрузить", "publish_wc")
         self._add_primary_button(layout, "Добавить", "add_product")
         self._add_primary_button(layout, "Изменить", "edit_product")
         self._add_primary_button(layout, "Удалить", "delete_product")
