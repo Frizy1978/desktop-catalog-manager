@@ -55,6 +55,31 @@ class ProductImageRepository:
             for row in rows
         ]
 
+    def list_for_publish(
+        self,
+        session: Session,
+        product_id: int,
+    ) -> list[dict[str, Any]]:
+        return self.list_by_product(session, product_id)
+
+    def set_wc_media_mapping(
+        self,
+        session: Session,
+        *,
+        image_id: int,
+        wc_media_id: int,
+        wc_source_url: str,
+    ) -> bool:
+        image = session.scalar(select(ProductImage).where(ProductImage.id == image_id))
+        if image is None:
+            return False
+
+        metadata = self._safe_metadata(image.metadata_json)
+        metadata["wc_media_id"] = int(wc_media_id)
+        metadata["wc_source_url"] = str(wc_source_url).strip()
+        image.metadata_json = json.dumps(metadata, ensure_ascii=False)
+        return True
+
     def add_local_image(
         self,
         session: Session,

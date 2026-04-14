@@ -578,7 +578,13 @@ class MainWindow(QMainWindow):
                     f"Товары: {counters.get('products_total', 0)} "
                     f"(создано: {counters.get('products_created', 0)}, "
                     f"обновлено: {counters.get('products_updated', 0)}, "
-                    f"ошибок: {counters.get('products_failed', 0)})"
+                    f"ошибок: {counters.get('products_failed', 0)})\n"
+                    f"Изображения категорий: загружено {counters.get('category_images_uploaded', 0)}, "
+                    f"переиспользовано {counters.get('category_images_reused', 0)}, "
+                    f"ошибок {counters.get('category_images_failed', 0)}\n"
+                    f"Изображения товаров: загружено {counters.get('product_images_uploaded', 0)}, "
+                    f"переиспользовано {counters.get('product_images_reused', 0)}, "
+                    f"ошибок {counters.get('product_images_failed', 0)}"
                 ),
             )
             return

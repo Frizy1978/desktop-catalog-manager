@@ -57,6 +57,9 @@ class AppSettings:
     wc_base_url: str
     wc_consumer_key: str
     wc_consumer_secret: str
+    wp_base_url: str
+    wp_username: str
+    wp_application_password: str
     wc_timeout_seconds: int
     wc_verify_ssl: bool
     log_max_bytes: int
@@ -92,6 +95,9 @@ class AppSettings:
             wc_base_url=_read_env("FISHOLHA_WC_BASE_URL", "https://fisholha.ru/"),
             wc_consumer_key=_read_env("FISHOLHA_WC_CONSUMER_KEY", ""),
             wc_consumer_secret=_read_env("FISHOLHA_WC_CONSUMER_SECRET", ""),
+            wp_base_url=_read_env("FISHOLHA_WP_BASE_URL", "https://fisholha.ru/"),
+            wp_username=_read_env("FISHOLHA_WP_USERNAME", ""),
+            wp_application_password=_read_env("FISHOLHA_WP_APPLICATION_PASSWORD", ""),
             wc_timeout_seconds=_read_int_env("FISHOLHA_WC_TIMEOUT_SECONDS", 20),
             wc_verify_ssl=_read_env("FISHOLHA_WC_VERIFY_SSL", "true").lower()
             in {"1", "true", "yes", "on"},

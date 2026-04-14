@@ -53,11 +53,7 @@ class WooCommerceClient:
         return self._get_paginated("products", page_callback=page_callback)
 
     def create_category(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request_json_dict(
-            "POST",
-            "products/categories",
-            payload=payload,
-        )
+        return self._request_json_dict("POST", "products/categories", payload=payload)
 
     def update_category(self, wc_category_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request_json_dict(
@@ -67,11 +63,7 @@ class WooCommerceClient:
         )
 
     def create_product(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._request_json_dict(
-            "POST",
-            "products",
-            payload=payload,
-        )
+        return self._request_json_dict("POST", "products", payload=payload)
 
     def update_product(self, wc_product_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request_json_dict(
@@ -133,7 +125,7 @@ class WooCommerceClient:
             data = response.json()
         except ValueError as exc:
             logger.exception(
-                "WooCommerce returned invalid JSON for method=%s resource='%s'",
+                "WooCommerce returned invalid JSON for method=%s resource=%s",
                 method,
                 resource,
             )
@@ -141,16 +133,17 @@ class WooCommerceClient:
                 "WooCommerce вернул некорректный JSON-ответ.",
                 technical_message=f"invalid_json: {exc}",
             ) from exc
+
         if not isinstance(data, dict):
             logger.error(
-                "Unexpected WooCommerce payload type for method=%s resource='%s': %s",
+                "Unexpected WooCommerce payload type for method=%s resource=%s type=%s",
                 method,
                 resource,
                 type(data),
             )
             raise WooCommerceClientError(
                 "WooCommerce вернул неожиданный формат данных.",
-                technical_message=f"unexpected_payload for {method} {resource}: {type(data)}",
+                technical_message=f"unexpected_payload: {type(data)}",
             )
         return data
 
@@ -172,8 +165,8 @@ class WooCommerceClient:
         url = f"{self._base_endpoint}/{resource.strip('/')}"
         try:
             response = requests.request(
-                method.upper(),
-                url,
+                method=method.upper(),
+                url=url,
                 params=request_params,
                 json=payload,
                 timeout=self._config.timeout_seconds,
@@ -181,40 +174,40 @@ class WooCommerceClient:
             )
         except requests.Timeout as exc:
             logger.exception(
-                "WooCommerce timeout for method=%s resource='%s'",
+                "WooCommerce timeout for method=%s resource=%s",
                 method,
                 resource,
             )
             raise WooCommerceClientError(
-                "Таймаут при подключении к WooCommerce. Проверьте доступность сайта и повторите попытку.",
+                "Таймаут при подключении к WooCommerce.",
                 technical_message=f"timeout: {exc}",
             ) from exc
         except requests.ConnectionError as exc:
             logger.exception(
-                "WooCommerce connection failed for method=%s resource='%s'",
+                "WooCommerce connection failed for method=%s resource=%s",
                 method,
                 resource,
             )
             raise WooCommerceClientError(
-                "Не удалось подключиться к WooCommerce. Проверьте URL, интернет и SSL-настройки.",
+                "Не удалось подключиться к WooCommerce. Проверьте URL, интернет и SSL.",
                 technical_message=f"connection_error: {exc}",
             ) from exc
         except requests.RequestException as exc:
             logger.exception(
-                "WooCommerce request failed for method=%s resource='%s'",
+                "WooCommerce request failed for method=%s resource=%s",
                 method,
                 resource,
             )
             raise WooCommerceClientError(
-                "Ошибка HTTP-запроса к WooCommerce. Повторите позже.",
-                technical_message=f"request_error for '{resource}': {exc}",
+                "Ошибка HTTP-запроса к WooCommerce.",
+                technical_message=f"request_error: {exc}",
             ) from exc
 
         if response.status_code >= 400:
             status = int(response.status_code)
-            error_text = response.text[:300]
+            error_text = response.text[:500]
             logger.error(
-                "WooCommerce API error for method=%s resource='%s': %s %s",
+                "WooCommerce API error: method=%s resource=%s status=%s body=%s",
                 method,
                 resource,
                 status,
@@ -238,7 +231,7 @@ class WooCommerceClient:
             data = response.json()
         except ValueError as exc:
             logger.exception(
-                "WooCommerce returned invalid JSON for resource='%s', page=%s",
+                "WooCommerce returned invalid JSON for resource=%s page=%s",
                 resource,
                 page,
             )
@@ -246,23 +239,30 @@ class WooCommerceClient:
                 "WooCommerce вернул некорректный JSON-ответ.",
                 technical_message=f"invalid_json: {exc}",
             ) from exc
+
         if not isinstance(data, list):
             logger.error(
-                "Unexpected WooCommerce payload type for resource='%s': %s",
+                "Unexpected WooCommerce payload type for resource=%s page=%s type=%s",
                 resource,
+                page,
                 type(data),
             )
             raise WooCommerceClientError(
                 "WooCommerce вернул неожиданный формат данных.",
-                technical_message=f"unexpected_payload for {resource}: {type(data)}",
+                technical_message=f"unexpected_payload: {type(data)}",
             )
+
         return [item for item in data if isinstance(item, dict)]
 
     def _status_user_message(self, status: int) -> str:
         if status in {401, 403}:
-            return "Ошибка авторизации WooCommerce. Проверьте Consumer Key и Consumer Secret."
+            return (
+                "Ошибка авторизации WooCommerce. Проверьте Consumer Key и Consumer Secret."
+            )
         if status == 404:
-            return "API WooCommerce не найден по указанному адресу. Проверьте FISHOLHA_WC_BASE_URL."
+            return (
+                "API WooCommerce не найден по указанному адресу. Проверьте FISHOLHA_WC_BASE_URL."
+            )
         if status >= 500:
-            return "Сервер WooCommerce временно недоступен (ошибка 5xx). Повторите позже."
+            return "Сервер WooCommerce временно недоступен (ошибка 5xx)."
         return f"WooCommerce вернул HTTP {status}."

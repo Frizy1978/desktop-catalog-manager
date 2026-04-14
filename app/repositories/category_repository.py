@@ -161,6 +161,8 @@ class CategoryRepository:
                 Category.slug,
                 Category.description,
                 Category.parent_id,
+                Category.image_source_url,
+                Category.image_local_path,
                 Category.external_wc_id,
                 Category.sync_status,
             )
@@ -179,6 +181,8 @@ class CategoryRepository:
                 "slug": str(row.slug or ""),
                 "description": str(row.description or "").strip(),
                 "parent_id": int(row.parent_id) if row.parent_id is not None else None,
+                "image_source_url": str(row.image_source_url or "").strip() or None,
+                "image_local_path": str(row.image_local_path or "").strip() or None,
                 "external_wc_id": int(row.external_wc_id)
                 if row.external_wc_id is not None
                 else None,
@@ -186,6 +190,19 @@ class CategoryRepository:
             }
             for row in rows
         ]
+
+    def set_published_image_source_url(
+        self,
+        session: Session,
+        *,
+        category_id: int,
+        source_url: str,
+    ) -> bool:
+        category = self.get_by_id(session, category_id)
+        if category is None:
+            return False
+        category.image_source_url = source_url.strip() or None
+        return True
 
     def category_wc_mapping_by_local_id(self, session: Session) -> dict[int, int]:
         rows = session.execute(

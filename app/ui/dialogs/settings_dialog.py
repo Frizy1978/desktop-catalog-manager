@@ -71,7 +71,7 @@ class SettingsDialog(QDialog):
         root.addLayout(controls)
 
     def _build_wc_group(self) -> QGroupBox:
-        group = QGroupBox("WooCommerce")
+        group = QGroupBox("WooCommerce и WordPress media")
         layout = QGridLayout(group)
         layout.setHorizontalSpacing(10)
         layout.setVerticalSpacing(8)
@@ -83,17 +83,34 @@ class SettingsDialog(QDialog):
         self.wc_secret_input = QLineEdit()
         self.wc_secret_input.setPlaceholderText("cs_...")
 
-        layout.addWidget(QLabel("Базовый URL"), 0, 0)
+        self.wp_base_url_input = QLineEdit()
+        self.wp_base_url_input.setPlaceholderText("https://fisholha.ru/")
+        self.wp_username_input = QLineEdit()
+        self.wp_username_input.setPlaceholderText("wp admin username")
+        self.wp_application_password_input = QLineEdit()
+        self.wp_application_password_input.setPlaceholderText(
+            "xxxx xxxx xxxx xxxx xxxx xxxx"
+        )
+        self.wp_application_password_input.setEchoMode(QLineEdit.Password)
+
+        layout.addWidget(QLabel("WooCommerce Base URL"), 0, 0)
         layout.addWidget(self.wc_base_url_input, 0, 1)
-        layout.addWidget(QLabel("Consumer Key"), 1, 0)
+        layout.addWidget(QLabel("WooCommerce Consumer Key"), 1, 0)
         layout.addWidget(self.wc_key_input, 1, 1)
-        layout.addWidget(QLabel("Consumer Secret"), 2, 0)
+        layout.addWidget(QLabel("WooCommerce Consumer Secret"), 2, 0)
         layout.addWidget(self.wc_secret_input, 2, 1)
 
-        save_wc_button = QPushButton("Сохранить WooCommerce настройки")
+        layout.addWidget(QLabel("WP media base URL"), 3, 0)
+        layout.addWidget(self.wp_base_url_input, 3, 1)
+        layout.addWidget(QLabel("WP username"), 4, 0)
+        layout.addWidget(self.wp_username_input, 4, 1)
+        layout.addWidget(QLabel("WP application password"), 5, 0)
+        layout.addWidget(self.wp_application_password_input, 5, 1)
+
+        save_wc_button = QPushButton("Сохранить настройки подключения")
         save_wc_button.setIcon(themed_icon("settings", color="#ffffff"))
         save_wc_button.clicked.connect(self._save_wc_settings)
-        layout.addWidget(save_wc_button, 3, 1)
+        layout.addWidget(save_wc_button, 6, 1)
         return group
 
     def _build_admin_group(self) -> QGroupBox:
@@ -142,11 +159,16 @@ class SettingsDialog(QDialog):
         backup_count = int(self._settings.log_backup_count)
         logs_dir = str(self._settings.logs_dir)
 
-        size_text = f"{max_bytes:,} байт ({self._format_megabytes(max_bytes):.2f} МБ)".replace(",", " ")
+        size_text = f"{max_bytes:,} байт ({self._format_megabytes(max_bytes):.2f} МБ)".replace(
+            ",",
+            " ",
+        )
         self.log_rotation_size_label = QLabel(size_text)
         self.log_rotation_backups_label = QLabel(str(backup_count))
         self.logs_dir_label = QLabel(logs_dir)
-        self.logs_dir_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.logs_dir_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         layout.addRow("Макс. размер файла лога", self.log_rotation_size_label)
         layout.addRow("Количество архивов", self.log_rotation_backups_label)
@@ -168,29 +190,43 @@ class SettingsDialog(QDialog):
                 "FISHOLHA_WC_BASE_URL": "https://fisholha.ru/",
                 "FISHOLHA_WC_CONSUMER_KEY": "",
                 "FISHOLHA_WC_CONSUMER_SECRET": "",
+                "FISHOLHA_WP_BASE_URL": "https://fisholha.ru/",
+                "FISHOLHA_WP_USERNAME": "",
+                "FISHOLHA_WP_APPLICATION_PASSWORD": "",
             }
         )
         self.wc_base_url_input.setText(values["FISHOLHA_WC_BASE_URL"])
         self.wc_key_input.setText(values["FISHOLHA_WC_CONSUMER_KEY"])
         self.wc_secret_input.setText(values["FISHOLHA_WC_CONSUMER_SECRET"])
+        self.wp_base_url_input.setText(values["FISHOLHA_WP_BASE_URL"])
+        self.wp_username_input.setText(values["FISHOLHA_WP_USERNAME"])
+        self.wp_application_password_input.setText(
+            values["FISHOLHA_WP_APPLICATION_PASSWORD"]
+        )
 
     def _save_wc_settings(self) -> None:
-        base_url = self.wc_base_url_input.text().strip() or "https://fisholha.ru/"
+        wc_base_url = self.wc_base_url_input.text().strip() or "https://fisholha.ru/"
         consumer_key = self.wc_key_input.text().strip()
         consumer_secret = self.wc_secret_input.text().strip()
+        wp_base_url = self.wp_base_url_input.text().strip() or "https://fisholha.ru/"
+        wp_username = self.wp_username_input.text().strip()
+        wp_application_password = self.wp_application_password_input.text().strip()
 
         self._env_config_service.save_values(
             {
-                "FISHOLHA_WC_BASE_URL": base_url,
+                "FISHOLHA_WC_BASE_URL": wc_base_url,
                 "FISHOLHA_WC_CONSUMER_KEY": consumer_key,
                 "FISHOLHA_WC_CONSUMER_SECRET": consumer_secret,
+                "FISHOLHA_WP_BASE_URL": wp_base_url,
+                "FISHOLHA_WP_USERNAME": wp_username,
+                "FISHOLHA_WP_APPLICATION_PASSWORD": wp_application_password,
             }
         )
         self.wc_settings_changed = True
         QMessageBox.information(
             self,
             "Настройки сохранены",
-            "Параметры WooCommerce сохранены в .env.",
+            "Параметры WooCommerce и WordPress media сохранены в .env.",
         )
 
     def _save_admin_credentials(self) -> None:
@@ -199,10 +235,18 @@ class SettingsDialog(QDialog):
         password_confirm = self.admin_password_confirm_input.text()
 
         if not username:
-            QMessageBox.warning(self, "Ошибка", "Логин администратора не может быть пустым.")
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Логин администратора не может быть пустым.",
+            )
             return
         if not password:
-            QMessageBox.warning(self, "Ошибка", "Введите новый пароль администратора.")
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Введите новый пароль администратора.",
+            )
             return
         if password != password_confirm:
             QMessageBox.warning(self, "Ошибка", "Пароли не совпадают.")

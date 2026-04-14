@@ -11,6 +11,7 @@ from app.repositories.category_repository import CategoryRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.publish_job_repository import PublishJobRepository
 from app.repositories.sync_run_repository import SyncRunRepository
+from app.services.wc_media_publish_service import WooMediaPublishService
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class WooCommercePublishService:
         sync_run_repository: SyncRunRepository,
         publish_job_repository: PublishJobRepository,
         wc_client: WooCommerceClient,
+        media_publish_service: WooMediaPublishService | None = None,
     ) -> None:
         self._database = database
         self._category_repository = category_repository
@@ -39,6 +41,7 @@ class WooCommercePublishService:
         self._sync_run_repository = sync_run_repository
         self._publish_job_repository = publish_job_repository
         self._wc_client = wc_client
+        self._media_publish_service = media_publish_service
 
     def run_publish(
         self,
@@ -65,10 +68,16 @@ class WooCommercePublishService:
             "categories_created": 0,
             "categories_updated": 0,
             "categories_failed": 0,
+            "category_images_uploaded": 0,
+            "category_images_reused": 0,
+            "category_images_failed": 0,
             "products_total": len(products),
             "products_created": 0,
             "products_updated": 0,
             "products_failed": 0,
+            "product_images_uploaded": 0,
+            "product_images_reused": 0,
+            "product_images_failed": 0,
         }
         errors: list[str] = []
         details: dict[str, list[dict[str, Any]]] = {"categories": [], "products": []}
@@ -150,7 +159,39 @@ class WooCommercePublishService:
                 self._category_repository.set_publish_pending(session, category_id)
 
             try:
-                payload = self._build_category_payload(row, category_wc_map=category_wc_map)
+                category_image_src: str | None = None
+                media_warning: str | None = None
+                if self._media_publish_service is not None:
+                    try:
+                        image_result = self._media_publish_service.resolve_category_image(
+                            category_id=category_id,
+                            image_source_url=row.get("image_source_url"),
+                            image_local_path=row.get("image_local_path"),
+                        )
+                        category_image_src = image_result.image_src
+                        counters["category_images_uploaded"] += image_result.uploaded
+                        counters["category_images_reused"] += image_result.reused
+                    except Exception as media_exc:  # noqa: BLE001
+                        counters["category_images_failed"] += 1
+                        media_warning = self._error_message(media_exc)
+                        raw_image_src = str(row.get("image_source_url") or "").strip()
+                        if self._is_remote_url(raw_image_src):
+                            category_image_src = raw_image_src
+                            counters["category_images_reused"] += 1
+                        logger.warning(
+                            "Category image publish skipped for category_id=%s: %s",
+                            category_id,
+                            media_warning,
+                        )
+                else:
+                    raw_image_src = str(row.get("image_source_url") or "").strip()
+                    category_image_src = raw_image_src if self._is_remote_url(raw_image_src) else None
+
+                payload = self._build_category_payload(
+                    row,
+                    category_wc_map=category_wc_map,
+                    image_src=category_image_src,
+                )
                 external_wc_id = row.get("external_wc_id")
                 response: dict[str, Any]
                 action: str
@@ -191,6 +232,7 @@ class WooCommercePublishService:
                         "name": category_name,
                         "action": action,
                         "status": "success",
+                        "media_warning": media_warning,
                     }
                 )
             except Exception as exc:  # noqa: BLE001
@@ -248,7 +290,31 @@ class WooCommercePublishService:
                         + ", ".join(str(value) for value in missing_category_ids)
                     )
 
-                payload = self._build_product_payload(row, category_wc_ids=category_wc_ids)
+                product_images_payload: list[dict[str, Any]] = []
+                media_warning: str | None = None
+                if self._media_publish_service is not None:
+                    try:
+                        images_result = self._media_publish_service.resolve_product_images(
+                            product_id=product_id
+                        )
+                        product_images_payload = images_result.images_payload
+                        counters["product_images_uploaded"] += images_result.uploaded
+                        counters["product_images_reused"] += images_result.reused
+                    except Exception as media_exc:  # noqa: BLE001
+                        counters["product_images_failed"] += 1
+                        media_warning = self._error_message(media_exc)
+                        logger.warning(
+                            "Product images publish skipped for product_id=%s: %s",
+                            product_id,
+                            media_warning,
+                        )
+                        product_images_payload = []
+
+                payload = self._build_product_payload(
+                    row,
+                    category_wc_ids=category_wc_ids,
+                    images_payload=product_images_payload,
+                )
                 external_wc_id = row.get("external_wc_id")
                 response: dict[str, Any]
                 action: str
@@ -288,6 +354,7 @@ class WooCommercePublishService:
                         "name": product_name,
                         "action": action,
                         "status": "success",
+                        "media_warning": media_warning,
                     }
                 )
             except Exception as exc:  # noqa: BLE001
@@ -311,6 +378,7 @@ class WooCommercePublishService:
         row: dict[str, Any],
         *,
         category_wc_map: dict[int, int],
+        image_src: str | None,
     ) -> dict[str, Any]:
         parent_local_id = row.get("parent_id")
         parent_wc_id = 0
@@ -327,6 +395,8 @@ class WooCommercePublishService:
             "description": str(row.get("description") or "").strip(),
             "parent": parent_wc_id,
         }
+        if image_src:
+            payload["image"] = {"src": image_src}
         return payload
 
     def _build_product_payload(
@@ -334,6 +404,7 @@ class WooCommercePublishService:
         row: dict[str, Any],
         *,
         category_wc_ids: list[int],
+        images_payload: list[dict[str, Any]],
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": str(row.get("name") or "").strip(),
@@ -361,6 +432,9 @@ class WooCommercePublishService:
         price_unit = str(row.get("price_unit") or "").strip()
         if price_unit:
             payload["meta_data"] = [{"key": "_price_unit", "value": price_unit}]
+
+        if images_payload:
+            payload["images"] = images_payload
 
         return payload
 
@@ -462,3 +536,7 @@ class WooCommercePublishService:
         if progress_callback is None:
             return
         progress_callback(max(0, min(100, int(percent))), message)
+
+    def _is_remote_url(self, value: str) -> bool:
+        lowered = value.strip().lower()
+        return lowered.startswith("http://") or lowered.startswith("https://")

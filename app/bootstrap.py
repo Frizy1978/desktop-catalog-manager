@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -9,6 +10,11 @@ from app.core.database import Database
 from app.core.logging_config import configure_logging
 from app.core.settings import AppSettings
 from app.db.session import SqlAlchemyDatabase
+from app.integrations.wp_media_client import (
+    WordPressMediaClient,
+    WordPressMediaClientConfig,
+    WordPressMediaClientError,
+)
 from app.integrations.woocommerce_client import WooCommerceClient, WooCommerceClientConfig
 from app.repositories.auth_repository import AuthRepository
 from app.repositories.catalog_repository import CatalogRepository
@@ -27,10 +33,13 @@ from app.services.publish_service import WooCommercePublishService
 from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import WooCommerceImportService
 from app.services.wc_image_download_service import WooImageDownloadService
+from app.services.wc_media_publish_service import WooMediaPublishService
 from app.ui.icons import app_logo_icon
 from app.ui.login_dialog import LoginDialog
 from app.ui.main_window import MainWindow
 from app.ui.styles import apply_styles
+
+logger = logging.getLogger(__name__)
 
 
 def run() -> int:
@@ -183,6 +192,35 @@ def _build_publish_service(
             verify_ssl=settings.wc_verify_ssl,
         )
     )
+    wp_media_client: WordPressMediaClient | None = None
+    if (
+        settings.wp_base_url
+        and settings.wp_username
+        and settings.wp_application_password
+    ):
+        try:
+            wp_media_client = WordPressMediaClient(
+                WordPressMediaClientConfig(
+                    base_url=settings.wp_base_url,
+                    username=settings.wp_username,
+                    application_password=settings.wp_application_password,
+                    timeout_seconds=settings.wc_timeout_seconds,
+                    verify_ssl=settings.wc_verify_ssl,
+                )
+            )
+        except WordPressMediaClientError:
+            logger.warning(
+                "WordPress media client disabled due to invalid configuration."
+            )
+            wp_media_client = None
+
+    product_image_repository = ProductImageRepository()
+    media_publish_service = WooMediaPublishService(
+        database=orm_database,
+        category_repository=CategoryRepository(),
+        product_image_repository=product_image_repository,
+        wp_media_client=wp_media_client,
+    )
     return WooCommercePublishService(
         database=orm_database,
         category_repository=CategoryRepository(),
@@ -190,4 +228,5 @@ def _build_publish_service(
         sync_run_repository=sync_run_repository,
         publish_job_repository=publish_job_repository,
         wc_client=wc_client,
+        media_publish_service=media_publish_service,
     )
