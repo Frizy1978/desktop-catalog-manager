@@ -4,7 +4,11 @@ import logging
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from app.services.publish_service import PublishRunResult, WooCommercePublishService
+from app.services.publish_service import (
+    PublishRunResult,
+    PublishSelection,
+    WooCommercePublishService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,14 +17,22 @@ class PublishWorker(QObject):
     progress_changed = Signal(int, str)
     publish_finished = Signal(object)
 
-    def __init__(self, publish_service: WooCommercePublishService) -> None:
+    def __init__(
+        self,
+        publish_service: WooCommercePublishService,
+        selection: PublishSelection | None = None,
+    ) -> None:
         super().__init__()
         self._publish_service = publish_service
+        self._selection = selection
 
     @Slot()
     def run(self) -> None:
         try:
-            result = self._publish_service.run_publish(progress_callback=self._on_progress)
+            result = self._publish_service.run_publish(
+                selection=self._selection,
+                progress_callback=self._on_progress,
+            )
         except Exception:  # noqa: BLE001
             logger.exception("Publish worker crashed unexpectedly")
             result = PublishRunResult(

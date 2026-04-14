@@ -431,6 +431,46 @@ class ProductRepository:
             for row in rows
         ]
 
+    def list_products_publish_preview(self, session: Session) -> list[dict[str, Any]]:
+        rows = session.execute(
+            select(
+                Product.id,
+                Product.name,
+                Product.sku,
+                Product.sync_status,
+                Product.external_wc_id,
+                func.group_concat(func.distinct(Category.name)).label("categories"),
+            )
+            .select_from(Product)
+            .join(
+                ProductCategoryLink,
+                ProductCategoryLink.product_id == Product.id,
+                isouter=True,
+            )
+            .join(Category, ProductCategoryLink.category_id == Category.id, isouter=True)
+            .where(
+                Product.is_archived.is_(False),
+                Product.sync_status.in_(
+                    ["new_local", "modified_local", "publish_error", "publish_pending"]
+                ),
+            )
+            .group_by(Product.id)
+            .order_by(Product.updated_at.desc(), Product.id.desc())
+        ).all()
+        return [
+            {
+                "id": int(row.id),
+                "name": str(row.name or ""),
+                "sku": str(row.sku or "").strip(),
+                "sync_status": str(row.sync_status or ""),
+                "external_wc_id": int(row.external_wc_id)
+                if row.external_wc_id is not None
+                else None,
+                "categories": str(row.categories or ""),
+            }
+            for row in rows
+        ]
+
     def get_product_category_wc_ids(
         self,
         session: Session,
@@ -486,6 +526,14 @@ class ProductRepository:
         if product is None:
             return False
         product.sync_status = "publish_error"
+        return True
+
+    def mark_modified_local(self, session: Session, product_id: int) -> bool:
+        product = self._get_active_product(session, product_id)
+        if product is None:
+            return False
+        if product.sync_status != "new_local":
+            product.sync_status = "modified_local"
         return True
 
     def _extract_price_unit(self, meta_data: Any) -> str | None:

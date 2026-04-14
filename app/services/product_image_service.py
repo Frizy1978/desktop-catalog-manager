@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from app.core.paths import ensure_directory
 from app.db.session import SqlAlchemyDatabase
+from app.repositories.product_repository import ProductRepository
 from app.repositories.product_image_repository import ProductImageRepository
 
 
@@ -15,10 +16,12 @@ class ProductImageService:
         *,
         database: SqlAlchemyDatabase,
         repository: ProductImageRepository,
+        product_repository: ProductRepository,
         media_root: Path,
     ) -> None:
         self._database = database
         self._repository = repository
+        self._product_repository = product_repository
         self._media_root = media_root
         self._product_media_root = ensure_directory(media_root / "products")
 
@@ -60,6 +63,7 @@ class ProductImageService:
                         "storage_kind": "local_file",
                     },
                 )
+                self._product_repository.mark_modified_local(session, product_id)
                 return image
         except Exception:
             if target_file.exists() and target_file.is_file():
@@ -68,11 +72,14 @@ class ProductImageService:
 
     def set_primary_image(self, product_id: int, image_id: int) -> bool:
         with self._database.session_scope() as session:
-            return self._repository.set_primary(
+            updated = self._repository.set_primary(
                 session,
                 product_id=product_id,
                 image_id=image_id,
             )
+            if updated:
+                self._product_repository.mark_modified_local(session, product_id)
+            return updated
 
     def remove_image(self, product_id: int, image_id: int) -> bool:
         with self._database.session_scope() as session:
@@ -81,6 +88,8 @@ class ProductImageService:
                 product_id=product_id,
                 image_id=image_id,
             )
+            if removed is not None:
+                self._product_repository.mark_modified_local(session, product_id)
         if removed is None:
             return False
 

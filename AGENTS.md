@@ -160,3 +160,8 @@ Always provide:
 2. what was implemented
 3. open issues / assumptions
 4. what the next logical phase is
+
+## WooCommerce / WordPress API split
+- Use WooCommerce Consumer Key / Secret only for wc/v3 categories/products
+- Use WordPress username + Application Password only for wp/v2/media uploads
+- Never mix these two authentication methods

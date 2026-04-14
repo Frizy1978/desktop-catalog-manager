@@ -4,11 +4,13 @@ import logging
 from typing import Callable, cast
 
 from PySide6.QtCore import QThread, Qt, Slot
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressDialog,
     QSplitter,
+    QSplitterHandle,
     QVBoxLayout,
     QWidget,
 )
@@ -19,11 +21,16 @@ from app.services.catalog_maintenance_service import CatalogMaintenanceService
 from app.services.catalog_service import CatalogService
 from app.services.env_config_service import EnvConfigService
 from app.services.operation_log_service import OperationLogService
-from app.services.publish_service import PublishRunResult, WooCommercePublishService
+from app.services.publish_service import (
+    PublishRunResult,
+    PublishSelection,
+    WooCommercePublishService,
+)
 from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import ImportRunResult, WooCommerceImportService
 from app.ui.dialogs.category_editor_dialog import CategoryEditorDialog
 from app.ui.dialogs.operation_log_dialog import OperationLogDialog
+from app.ui.dialogs.publish_changes_dialog import PublishChangesDialog
 from app.ui.dialogs.product_editor_dialog import ProductEditorDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
 from app.ui.widgets.categories_panel import CategoriesPanel
@@ -33,6 +40,36 @@ from app.ui.workers.import_worker import ImportWorker
 from app.ui.workers.publish_worker import PublishWorker
 
 logger = logging.getLogger(__name__)
+
+
+class CatalogSplitterHandle(QSplitterHandle):
+    def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#d7deea"))
+
+        border_pen = QPen(QColor("#b8c4d6"))
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.drawLine(0, 0, 0, self.height())
+        painter.drawLine(self.width() - 1, 0, self.width() - 1, self.height())
+
+        grip_pen = QPen(QColor("#7c8ea8"))
+        grip_pen.setWidth(2)
+        painter.setPen(grip_pen)
+        center_x = self.rect().center().x()
+        center_y = self.rect().center().y()
+        for offset in (-10, 0, 10):
+            painter.drawLine(center_x, center_y + offset - 4, center_x, center_y + offset + 4)
+
+
+class CatalogSplitter(QSplitter):
+    def createHandle(self) -> QSplitterHandle:
+        return CatalogSplitterHandle(self.orientation(), self)
 
 
 class MainWindow(QMainWindow):
@@ -87,7 +124,9 @@ class MainWindow(QMainWindow):
         root = QWidget()
         root_layout = QVBoxLayout(root)
 
-        splitter = QSplitter()
+        splitter = CatalogSplitter()
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(12)
         self.categories_panel = CategoriesPanel()
 
         right_side = QWidget()
@@ -113,6 +152,8 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(self.categories_panel)
         splitter.addWidget(right_side)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         splitter.setSizes([340, 1100])
 
         root_layout.addWidget(splitter)
@@ -136,7 +177,9 @@ class MainWindow(QMainWindow):
 
     def _reload_catalog_view(self) -> None:
         category_rows = self._catalog_service.get_category_sidebar_items()
-        valid_category_ids = {int(row["id"]) for row in category_rows if row.get("id") is not None}
+        valid_category_ids = {
+            int(row["id"]) for row in category_rows if row.get("id") is not None
+        }
         if self._selected_category_id not in valid_category_ids:
             self._selected_category_id = None
         self.categories_panel.populate(
@@ -222,6 +265,9 @@ class MainWindow(QMainWindow):
             return
         if action_key == "publish_wc":
             self._handle_publish_to_wc()
+            return
+        if action_key == "show_changes":
+            self._open_publish_changes_dialog()
             return
         if action_key == "add_product":
             self._open_add_product_dialog()
@@ -443,6 +489,9 @@ class MainWindow(QMainWindow):
         self._import_thread.start()
 
     def _handle_publish_to_wc(self) -> None:
+        self._open_publish_changes_dialog()
+
+    def _open_publish_changes_dialog(self) -> None:
         if self._publish_service is None:
             QMessageBox.warning(
                 self,
@@ -467,6 +516,19 @@ class MainWindow(QMainWindow):
             )
             return
 
+        dialog = PublishChangesDialog(
+            catalog_service=self._catalog_service,
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        self._start_publish_to_wc(dialog.publish_selection)
+
+    def _start_publish_to_wc(
+        self,
+        selection: PublishSelection | None = None,
+    ) -> None:
         self.toolbar_panel.setEnabled(False)
         self._publish_progress_dialog = QProgressDialog(
             "Подготовка публикации...",
@@ -485,7 +547,7 @@ class MainWindow(QMainWindow):
         self._publish_progress_dialog.show()
 
         self._publish_thread = QThread(self)
-        self._publish_worker = PublishWorker(self._publish_service)
+        self._publish_worker = PublishWorker(self._publish_service, selection=selection)
         self._publish_worker.moveToThread(self._publish_thread)
 
         self._publish_thread.started.connect(self._publish_worker.run)
@@ -520,7 +582,7 @@ class MainWindow(QMainWindow):
             counters = result.counters
             QMessageBox.information(
                 self,
-                "Импорт завершен",
+                "Импорт завершён",
                 (
                     "Импорт из WooCommerce выполнен успешно.\n\n"
                     f"Категории: {counters.get('categories_total', 0)} "

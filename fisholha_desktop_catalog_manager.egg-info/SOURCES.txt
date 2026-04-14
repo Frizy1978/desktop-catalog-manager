@@ -14,6 +14,7 @@ app/db/models.py
 app/db/session.py
 app/integrations/__init__.py
 app/integrations/woocommerce_client.py
+app/integrations/wp_media_client.py
 app/models/__init__.py
 app/models/enums.py
 app/models/user.py
@@ -30,7 +31,9 @@ app/repositories/__init__.py
 app/repositories/auth_repository.py
 app/repositories/catalog_repository.py
 app/repositories/category_repository.py
+app/repositories/product_image_repository.py
 app/repositories/product_repository.py
+app/repositories/publish_job_repository.py
 app/repositories/sync_run_repository.py
 app/services/__init__.py
 app/services/auth_service.py
@@ -39,7 +42,11 @@ app/services/catalog_service.py
 app/services/env_config_service.py
 app/services/login_memory_service.py
 app/services/operation_log_service.py
+app/services/product_image_service.py
+app/services/publish_service.py
 app/services/sync_import_service.py
+app/services/wc_image_download_service.py
+app/services/wc_media_publish_service.py
 app/ui/__init__.py
 app/ui/icons.py
 app/ui/login_dialog.py
@@ -49,6 +56,7 @@ app/ui/dialogs/__init__.py
 app/ui/dialogs/category_editor_dialog.py
 app/ui/dialogs/operation_log_dialog.py
 app/ui/dialogs/product_editor_dialog.py
+app/ui/dialogs/publish_changes_dialog.py
 app/ui/dialogs/settings_dialog.py
 app/ui/widgets/__init__.py
 app/ui/widgets/categories_panel.py
@@ -56,10 +64,12 @@ app/ui/widgets/products_table_panel.py
 app/ui/widgets/toolbar_panel.py
 app/ui/workers/__init__.py
 app/ui/workers/import_worker.py
+app/ui/workers/publish_worker.py
 fisholha_desktop_catalog_manager.egg-info/PKG-INFO
 fisholha_desktop_catalog_manager.egg-info/SOURCES.txt
 fisholha_desktop_catalog_manager.egg-info/dependency_links.txt
 fisholha_desktop_catalog_manager.egg-info/requires.txt
 fisholha_desktop_catalog_manager.egg-info/top_level.txt
 tests/test_phase2_models.py
+tests/test_phase5_publish.py
 tests/test_schema_smoke.py

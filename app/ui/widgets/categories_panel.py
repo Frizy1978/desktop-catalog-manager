@@ -43,6 +43,8 @@ class CategoriesPanel(QWidget):
         self.tree_widget = QTreeWidget()
         self.tree_widget.setHeaderHidden(True)
         self.tree_widget.setIconSize(QSize(20, 20))
+        self.tree_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tree_widget.setMinimumWidth(260)
         self.tree_widget.setStyleSheet(
             """
             QTreeWidget::item:selected {

@@ -118,3 +118,6 @@ class CatalogService:
 
     def archive_product(self, product_id: int) -> bool:
         return self._repository.archive_product(product_id)
+
+    def get_publish_preview(self) -> dict:
+        return self._repository.get_publish_preview()

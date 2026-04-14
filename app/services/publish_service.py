@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Callable
 
+from sqlalchemy.orm import Session
+
 from app.db.session import SqlAlchemyDatabase
 from app.integrations.woocommerce_client import WooCommerceClient, WooCommerceClientError
 from app.repositories.category_repository import CategoryRepository
@@ -21,6 +23,13 @@ class PublishRunResult:
     success: bool
     counters: dict[str, int]
     errors: list[str]
+
+
+@dataclass(slots=True)
+class PublishSelection:
+    target: str = "wc"
+    category_ids: list[int] | None = None
+    product_ids: list[int] | None = None
 
 
 class WooCommercePublishService:
@@ -45,14 +54,26 @@ class WooCommercePublishService:
 
     def run_publish(
         self,
+        selection: PublishSelection | None = None,
         progress_callback: Callable[[int, str], None] | None = None,
     ) -> PublishRunResult:
         self._emit_progress(progress_callback, 0, "Подготовка публикации...")
+        if selection is not None and selection.target != "wc":
+            raise ValueError(f"Unsupported publish target: {selection.target}")
         run_id = self._sync_run_repository.start_run("publish_to_wc")
 
         with self._database.session_scope() as session:
-            categories = self._category_repository.list_categories_for_publish(session)
-            products = self._product_repository.list_products_for_publish(session)
+            all_categories = self._category_repository.list_categories_for_publish(session)
+            products = self._filter_rows_by_selection(
+                self._product_repository.list_products_for_publish(session),
+                selection.product_ids if selection is not None else None,
+            )
+            categories = self._resolve_categories_for_selection(
+                session=session,
+                all_categories=all_categories,
+                products=products,
+                selection=selection,
+            )
 
         entities_payload = {
             "categories": [int(row["id"]) for row in categories],
@@ -540,3 +561,91 @@ class WooCommercePublishService:
     def _is_remote_url(self, value: str) -> bool:
         lowered = value.strip().lower()
         return lowered.startswith("http://") or lowered.startswith("https://")
+
+    def _filter_rows_by_selection(
+        self,
+        rows: list[dict[str, Any]],
+        selected_ids: list[int] | None,
+    ) -> list[dict[str, Any]]:
+        if selected_ids is None:
+            return rows
+        allowed_ids = {int(value) for value in selected_ids}
+        return [row for row in rows if int(row["id"]) in allowed_ids]
+
+    def _resolve_categories_for_selection(
+        self,
+        *,
+        session: Session,
+        all_categories: list[dict[str, Any]],
+        products: list[dict[str, Any]],
+        selection: PublishSelection | None,
+    ) -> list[dict[str, Any]]:
+        categories = self._filter_rows_by_selection(
+            all_categories,
+            selection.category_ids if selection is not None else None,
+        )
+        if selection is None:
+            return categories
+
+        selected_category_ids = {int(row["id"]) for row in categories}
+        selected_category_ids.update(
+            self._required_category_ids_for_products(
+                session=session,
+                products=products,
+            )
+        )
+        if not selected_category_ids:
+            return categories
+
+        selected_category_ids = self._expand_category_ids_with_pending_ancestors(
+            selected_category_ids=selected_category_ids,
+            all_categories=all_categories,
+        )
+        return [
+            row for row in all_categories if int(row["id"]) in selected_category_ids
+        ]
+
+    def _required_category_ids_for_products(
+        self,
+        *,
+        session: Session,
+        products: list[dict[str, Any]],
+    ) -> set[int]:
+        required_category_ids: set[int] = set()
+
+        for product_row in products:
+            product_id = int(product_row["id"])
+            _category_wc_ids, missing_category_ids = (
+                self._product_repository.get_product_category_wc_ids(
+                    session,
+                    product_id=product_id,
+                )
+            )
+            required_category_ids.update(missing_category_ids)
+        return required_category_ids
+
+    def _expand_category_ids_with_pending_ancestors(
+        self,
+        *,
+        selected_category_ids: set[int],
+        all_categories: list[dict[str, Any]],
+    ) -> set[int]:
+        categories_by_id = {int(row["id"]): row for row in all_categories}
+        expanded_category_ids = set(selected_category_ids)
+        pending_ids = list(expanded_category_ids)
+        while pending_ids:
+            category_id = pending_ids.pop()
+            category_row = categories_by_id.get(category_id)
+            if category_row is None:
+                continue
+
+            parent_id = category_row.get("parent_id")
+            if parent_id is None:
+                continue
+
+            normalized_parent_id = int(parent_id)
+            if normalized_parent_id in categories_by_id and normalized_parent_id not in expanded_category_ids:
+                expanded_category_ids.add(normalized_parent_id)
+                pending_ids.append(normalized_parent_id)
+
+        return expanded_category_ids

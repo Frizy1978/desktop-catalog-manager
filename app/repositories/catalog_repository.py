@@ -149,3 +149,15 @@ class CatalogRepository:
     def archive_product(self, product_id: int) -> bool:
         with self._database.session_scope() as session:
             return self._product_repository.archive_product(session, product_id)
+
+    def get_publish_preview(self) -> dict:
+        with self._database.session_scope() as session:
+            categories = self._category_repository.list_categories_for_publish(session)
+            products = self._product_repository.list_products_publish_preview(session)
+            return {
+                "categories": categories,
+                "products": products,
+                "categories_total": len(categories),
+                "products_total": len(products),
+                "total_items": len(categories) + len(products),
+            }

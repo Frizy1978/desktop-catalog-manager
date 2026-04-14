@@ -77,6 +77,7 @@ def run() -> int:
     product_image_service = ProductImageService(
         database=orm_database,
         repository=ProductImageRepository(),
+        product_repository=ProductRepository(),
         media_root=settings.media_dir,
     )
     sync_run_repository = SyncRunRepository(database=orm_database)
