@@ -12,6 +12,10 @@ from app.db.models import Category, Product, ProductCategoryLink, ProductImage
 
 
 class ProductRepository:
+    _ALLOWED_PUBLISHED_STATES = {"draft", "publish", "pending", "private"}
+    _ALLOWED_VISIBILITY_VALUES = {"visible", "catalog", "search", "hidden"}
+    _ALLOWED_STOCK_STATUSES = {"instock", "outofstock", "onbackorder"}
+
     def upsert_from_wc_payload(
         self,
         session: Session,
@@ -35,6 +39,7 @@ class ProductRepository:
         product.price_unit = self._extract_price_unit(payload.get("meta_data"))
         product.is_featured = bool(payload.get("featured", False))
         product.visibility = str(payload.get("catalog_visibility") or "visible")
+        product.stock_status = self._normalize_stock_status(payload.get("stock_status"))
         product.published_state = str(payload.get("status") or "draft")
         product.sync_status = "synced"
         product.is_archived = False
@@ -74,12 +79,18 @@ class ProductRepository:
             preferred_primary = position == 0
             prepared.append((src, position, preferred_primary))
 
-        existing_wc_images = session.scalars(
-            select(ProductImage).where(
-                ProductImage.product_id == product_id,
-                ProductImage.source_type == "wc_url",
-            )
+        all_existing_images = session.scalars(
+            select(ProductImage).where(ProductImage.product_id == product_id)
         ).all()
+        existing_wc_images = [
+            image_row
+            for image_row in all_existing_images
+            if image_row.source_type == "wc_url"
+        ]
+        has_non_wc_primary = any(
+            bool(image_row.is_primary) and image_row.source_type != "wc_url"
+            for image_row in all_existing_images
+        )
         existing_by_src: dict[str, list[ProductImage]] = {}
         for image_row in existing_wc_images:
             key = str(image_row.original_path or "").strip()
@@ -100,6 +111,16 @@ class ProductRepository:
             if item[2]:
                 primary_index = index
                 break
+
+        # Preserve a user-selected local primary image if it exists.
+        # Otherwise, reset WC primary markers before assigning the new one so
+        # SQLite's partial unique index on product_images(product_id)
+        # WHERE is_primary = 1 is not violated during the import update.
+        if not has_non_wc_primary:
+            for image_row in existing_wc_images:
+                image_row.is_primary = False
+            if existing_wc_images:
+                session.flush()
 
         used_ids: set[int] = set()
         active_count = 0
@@ -128,7 +149,7 @@ class ProductRepository:
                 target_row.source_type = "wc_url"
                 target_row.sort_order = position
 
-            target_row.is_primary = index == primary_index
+            target_row.is_primary = (not has_non_wc_primary) and index == primary_index
             used_ids.add(int(target_row.id))
             active_count += 1
 
@@ -145,10 +166,87 @@ class ProductRepository:
         page_size: int,
         category_id: int | None = None,
         search_query: str = "",
+        sync_status_filter: str = "",
+        published_state_filter: str = "",
+        visibility_filter: str = "",
+        is_featured_filter: str = "",
+        stock_status_filter: str = "",
     ) -> tuple[list[dict], int]:
+        filtered_items = self._list_products_for_table_items(
+            session,
+            category_id=category_id,
+            search_query=search_query,
+            sync_status_filter=sync_status_filter,
+            published_state_filter=published_state_filter,
+            visibility_filter=visibility_filter,
+            is_featured_filter=is_featured_filter,
+            stock_status_filter=stock_status_filter,
+        )
         safe_page = max(1, page)
         safe_page_size = max(1, page_size)
+        total_items = len(filtered_items)
+        offset = (safe_page - 1) * safe_page_size
+        paged_items = filtered_items[offset : offset + safe_page_size]
+        items = [
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "sku": item["sku"],
+                "price": item["price"],
+                "price_unit": item["price_unit"],
+                "status": item["status"],
+                "visibility": item["visibility"],
+                "is_featured": item["is_featured"],
+                "stock_status": item["stock_status"],
+                "sync_status": item["sync_status"],
+                "categories": item["categories"],
+            }
+            for item in paged_items
+        ]
+        return items, total_items
+
+    def list_product_ids_for_table_selection(
+        self,
+        session: Session,
+        *,
+        category_id: int | None = None,
+        search_query: str = "",
+        sync_status_filter: str = "",
+        published_state_filter: str = "",
+        visibility_filter: str = "",
+        is_featured_filter: str = "",
+        stock_status_filter: str = "",
+    ) -> list[int]:
+        filtered_items = self._list_products_for_table_items(
+            session,
+            category_id=category_id,
+            search_query=search_query,
+            sync_status_filter=sync_status_filter,
+            published_state_filter=published_state_filter,
+            visibility_filter=visibility_filter,
+            is_featured_filter=is_featured_filter,
+            stock_status_filter=stock_status_filter,
+        )
+        return [int(item["id"]) for item in filtered_items]
+
+    def _list_products_for_table_items(
+        self,
+        session: Session,
+        *,
+        category_id: int | None = None,
+        search_query: str = "",
+        sync_status_filter: str = "",
+        published_state_filter: str = "",
+        visibility_filter: str = "",
+        is_featured_filter: str = "",
+        stock_status_filter: str = "",
+    ) -> list[dict[str, Any]]:
         normalized_search = search_query.strip()
+        normalized_sync_status = sync_status_filter.strip().lower()
+        normalized_published_state = published_state_filter.strip().lower()
+        normalized_visibility = visibility_filter.strip().lower()
+        normalized_is_featured = is_featured_filter.strip().lower()
+        normalized_stock_status = stock_status_filter.strip().lower()
 
         stmt = (
             select(
@@ -159,6 +257,9 @@ class ProductRepository:
                 Product.price_unit,
                 Product.published_state,
                 Product.sync_status,
+                Product.visibility,
+                Product.is_featured,
+                Product.stock_status,
                 Product.updated_at,
                 func.group_concat(func.distinct(Category.name)).label("categories"),
             )
@@ -193,6 +294,9 @@ class ProductRepository:
                 "price_unit": row.price_unit,
                 "status": row.published_state,
                 "sync_status": row.sync_status,
+                "visibility": row.visibility,
+                "is_featured": bool(row.is_featured),
+                "stock_status": row.stock_status,
                 "categories": row.categories or "",
                 "updated_at": row.updated_at,
             }
@@ -202,32 +306,17 @@ class ProductRepository:
         filtered_items = [
             item
             for item in all_items
-            if self._matches_search(
-                normalized_search,
-                [
-                    str(item.get("name", "")),
-                    str(item.get("sku", "")),
-                    str(item.get("categories", "")),
-                ],
+            if self._matches_product_table_filters(
+                item,
+                search_query=normalized_search,
+                sync_status_filter=normalized_sync_status,
+                published_state_filter=normalized_published_state,
+                visibility_filter=normalized_visibility,
+                is_featured_filter=normalized_is_featured,
+                stock_status_filter=normalized_stock_status,
             )
         ]
-        total_items = len(filtered_items)
-        offset = (safe_page - 1) * safe_page_size
-        paged_items = filtered_items[offset : offset + safe_page_size]
-        items = [
-            {
-                "id": item["id"],
-                "name": item["name"],
-                "sku": item["sku"],
-                "price": item["price"],
-                "price_unit": item["price_unit"],
-                "status": item["status"],
-                "sync_status": item["sync_status"],
-                "categories": item["categories"],
-            }
-            for item in paged_items
-        ]
-        return items, total_items
+        return filtered_items
 
     def get_product_details(self, session: Session, product_id: int) -> dict | None:
         product = self._get_active_product(session, product_id)
@@ -253,7 +342,11 @@ class ProductRepository:
             "price_unit": product.price_unit or "",
             "sku": product.sku or "",
             "status": product.published_state,
+            "published_state": product.published_state,
             "sync_status": product.sync_status,
+            "visibility": product.visibility or "visible",
+            "is_featured": bool(product.is_featured),
+            "stock_status": product.stock_status or "instock",
             "category_ids": [int(row.category_id) for row in category_rows],
             "image_urls": [str(row.original_path) for row in image_rows if row.original_path],
         }
@@ -267,6 +360,10 @@ class ProductRepository:
         price: str | Decimal | None,
         price_unit: str | None,
         sku: str | None,
+        published_state: str | None,
+        visibility: str | None,
+        is_featured: bool,
+        stock_status: str | None,
         category_ids: list[int],
         image_urls: list[str] | None = None,
     ) -> int:
@@ -283,6 +380,9 @@ class ProductRepository:
         normalized_description = (description or "").strip() or None
         normalized_sku = (sku or "").strip() or None
         normalized_price_unit = (price_unit or "").strip() or None
+        normalized_published_state = self._normalize_published_state(published_state)
+        normalized_visibility = self._normalize_visibility(visibility)
+        normalized_stock_status = self._normalize_stock_status(stock_status)
 
         product = Product(
             name=normalized_name,
@@ -294,9 +394,10 @@ class ProductRepository:
             regular_price=normalized_price,
             sale_price=None,
             price_unit=normalized_price_unit,
-            is_featured=False,
-            visibility="visible",
-            published_state="draft",
+            is_featured=bool(is_featured),
+            visibility=normalized_visibility,
+            stock_status=normalized_stock_status,
+            published_state=normalized_published_state,
             sync_status="new_local",
             external_wc_id=None,
             is_archived=False,
@@ -327,6 +428,10 @@ class ProductRepository:
         price: str | Decimal | None,
         price_unit: str | None,
         sku: str | None,
+        published_state: str | None,
+        visibility: str | None,
+        is_featured: bool,
+        stock_status: str | None,
         category_ids: list[int],
         image_urls: list[str] | None = None,
     ) -> None:
@@ -357,8 +462,11 @@ class ProductRepository:
         product.regular_price = product.price
         product.price_unit = (price_unit or "").strip() or None
         product.sku = (sku or "").strip() or None
+        product.published_state = self._normalize_published_state(published_state)
+        product.visibility = self._normalize_visibility(visibility)
+        product.is_featured = bool(is_featured)
+        product.stock_status = self._normalize_stock_status(stock_status)
         product.is_archived = False
-        product.published_state = product.published_state or "draft"
         if product.sync_status != "new_local":
             product.sync_status = "modified_local"
 
@@ -383,6 +491,181 @@ class ProductRepository:
             product.sync_status = "archived"
         return True
 
+    def bulk_update_price_unit(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        price_unit: str | None,
+    ) -> int:
+        normalized_price_unit = (price_unit or "").strip() or None
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if (product.price_unit or None) == normalized_price_unit:
+                continue
+            product.price_unit = normalized_price_unit
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_update_price(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        price: str | Decimal,
+    ) -> int:
+        normalized_price = self._to_decimal(price)
+        if normalized_price is None:
+            raise ValueError("Цена должна быть указана корректно.")
+
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if (
+                product.price == normalized_price
+                and product.regular_price == normalized_price
+                and product.sale_price is None
+            ):
+                continue
+            product.price = normalized_price
+            product.regular_price = normalized_price
+            product.sale_price = None
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_replace_category(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        category_id: int,
+    ) -> int:
+        category = session.scalar(
+            select(Category).where(
+                Category.id == category_id,
+                Category.is_archived.is_(False),
+            )
+        )
+        if category is None:
+            raise ValueError("Категория для массового изменения не найдена.")
+
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            current_category_ids = [
+                int(link.category_id)
+                for link in sorted(
+                    product.category_links,
+                    key=lambda link: int(link.category_id),
+                )
+            ]
+            if current_category_ids == [int(category_id)]:
+                continue
+            self.replace_category_links(
+                session,
+                product_id=int(product.id),
+                category_ids=[int(category_id)],
+            )
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_update_published_state(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        published_state: str,
+    ) -> int:
+        normalized_state = str(published_state or "").strip().lower()
+        if normalized_state not in self._ALLOWED_PUBLISHED_STATES:
+            raise ValueError("Некорректный статус публикации для массового изменения.")
+
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if (product.published_state or "draft") == normalized_state:
+                continue
+            product.published_state = normalized_state
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_update_visibility(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        visibility: str,
+    ) -> int:
+        normalized_visibility = str(visibility or "").strip().lower()
+        if normalized_visibility not in self._ALLOWED_VISIBILITY_VALUES:
+            raise ValueError("Некорректная видимость каталога для массового изменения.")
+
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if (product.visibility or "visible") == normalized_visibility:
+                continue
+            product.visibility = normalized_visibility
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_update_featured(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        is_featured: bool,
+    ) -> int:
+        normalized_featured = bool(is_featured)
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if bool(product.is_featured) == normalized_featured:
+                continue
+            product.is_featured = normalized_featured
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_update_stock_status(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+        stock_status: str,
+    ) -> int:
+        normalized_stock_status = str(stock_status or "").strip().lower()
+        if normalized_stock_status not in self._ALLOWED_STOCK_STATUSES:
+            raise ValueError("Некорректное наличие для массового изменения.")
+
+        updated_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if (product.stock_status or "instock") == normalized_stock_status:
+                continue
+            product.stock_status = normalized_stock_status
+            if product.sync_status != "new_local":
+                product.sync_status = "modified_local"
+            updated_count += 1
+        return updated_count
+
+    def bulk_archive_products(
+        self,
+        session: Session,
+        *,
+        product_ids: list[int],
+    ) -> int:
+        archived_count = 0
+        for product in self._get_active_products_by_ids(session, product_ids):
+            if self.archive_product(session, int(product.id)):
+                archived_count += 1
+        return archived_count
+
     def list_products_for_publish(self, session: Session) -> list[dict[str, Any]]:
         rows = session.execute(
             select(
@@ -397,6 +680,8 @@ class ProductRepository:
                 Product.sale_price,
                 Product.price_unit,
                 Product.visibility,
+                Product.stock_status,
+                Product.is_featured,
                 Product.published_state,
                 Product.external_wc_id,
                 Product.sync_status,
@@ -422,6 +707,8 @@ class ProductRepository:
                 "sale_price": row.sale_price,
                 "price_unit": str(row.price_unit or "").strip() or None,
                 "visibility": str(row.visibility or "visible"),
+                "stock_status": str(row.stock_status or "instock"),
+                "is_featured": bool(row.is_featured),
                 "published_state": str(row.published_state or "draft"),
                 "external_wc_id": int(row.external_wc_id)
                 if row.external_wc_id is not None
@@ -558,6 +845,24 @@ class ProductRepository:
         except (InvalidOperation, ValueError):
             return None
 
+    def _normalize_published_state(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower() or "draft"
+        if normalized not in self._ALLOWED_PUBLISHED_STATES:
+            raise ValueError("Некорректный статус публикации товара.")
+        return normalized
+
+    def _normalize_visibility(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower() or "visible"
+        if normalized not in self._ALLOWED_VISIBILITY_VALUES:
+            raise ValueError("Некорректная видимость товара.")
+        return normalized
+
+    def _normalize_stock_status(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower() or "instock"
+        if normalized not in self._ALLOWED_STOCK_STATUSES:
+            return "instock"
+        return normalized
+
     def _replace_images_from_urls(
         self,
         session: Session,
@@ -655,6 +960,46 @@ class ProductRepository:
                     return True
         return False
 
+    def _matches_product_table_filters(
+        self,
+        item: dict[str, Any],
+        *,
+        search_query: str,
+        sync_status_filter: str,
+        published_state_filter: str,
+        visibility_filter: str,
+        is_featured_filter: str,
+        stock_status_filter: str,
+    ) -> bool:
+        if sync_status_filter:
+            item_sync_status = str(item.get("sync_status", "")).strip().lower()
+            if item_sync_status != sync_status_filter:
+                return False
+        if published_state_filter:
+            item_published_state = str(item.get("status", "")).strip().lower()
+            if item_published_state != published_state_filter:
+                return False
+        if visibility_filter:
+            item_visibility = str(item.get("visibility", "")).strip().lower()
+            if item_visibility != visibility_filter:
+                return False
+        if is_featured_filter:
+            item_is_featured = "true" if bool(item.get("is_featured")) else "false"
+            if item_is_featured != is_featured_filter:
+                return False
+        if stock_status_filter:
+            item_stock_status = str(item.get("stock_status", "")).strip().lower()
+            if item_stock_status != stock_status_filter:
+                return False
+        return self._matches_search(
+            search_query,
+            [
+                str(item.get("name", "")),
+                str(item.get("sku", "")),
+                str(item.get("categories", "")),
+            ],
+        )
+
     def _compact_text(self, text: str) -> str:
         normalized = re.sub(r"[^0-9a-zа-я]+", " ", text.lower(), flags=re.IGNORECASE)
         return " ".join(normalized.split())
@@ -665,4 +1010,23 @@ class ProductRepository:
                 Product.id == product_id,
                 Product.is_archived.is_(False),
             )
+        )
+
+    def _get_active_products_by_ids(
+        self,
+        session: Session,
+        product_ids: list[int],
+    ) -> list[Product]:
+        normalized_ids = sorted({int(product_id) for product_id in product_ids if product_id})
+        if not normalized_ids:
+            return []
+        return list(
+            session.scalars(
+                select(Product)
+                .where(
+                    Product.id.in_(normalized_ids),
+                    Product.is_archived.is_(False),
+                )
+                .order_by(Product.id.asc())
+            ).all()
         )

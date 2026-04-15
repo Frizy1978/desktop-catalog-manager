@@ -95,3 +95,17 @@ class SqlAlchemyDatabase:
                 WHERE is_primary = 1
                 """
             )
+
+            product_table_info = connection.exec_driver_sql("PRAGMA table_info(products)")
+            product_columns = {row[1] for row in product_table_info.fetchall()}
+            if "stock_status" not in product_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE products ADD COLUMN stock_status TEXT NOT NULL DEFAULT 'instock'"
+                )
+            connection.exec_driver_sql(
+                """
+                UPDATE products
+                SET stock_status = 'instock'
+                WHERE stock_status IS NULL OR stock_status = ''
+                """
+            )

@@ -9,6 +9,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -83,6 +84,21 @@ class ProductEditorDialog(QDialog):
         self.price_unit_input = QLineEdit()
         self.price_unit_input.setPlaceholderText("кг / шт / упак")
         self.sku_input = QLineEdit()
+        self.published_state_combo = QComboBox()
+        self.published_state_combo.addItem("Черновик", "draft")
+        self.published_state_combo.addItem("Опубликован", "publish")
+        self.published_state_combo.addItem("На проверке", "pending")
+        self.published_state_combo.addItem("Приватный", "private")
+        self.visibility_combo = QComboBox()
+        self.visibility_combo.addItem("Видим везде", "visible")
+        self.visibility_combo.addItem("Только в каталоге", "catalog")
+        self.visibility_combo.addItem("Только в поиске", "search")
+        self.visibility_combo.addItem("Скрыт", "hidden")
+        self.stock_status_combo = QComboBox()
+        self.stock_status_combo.addItem("В наличии", "instock")
+        self.stock_status_combo.addItem("Нет в наличии", "outofstock")
+        self.stock_status_combo.addItem("Под заказ", "onbackorder")
+        self.is_featured_checkbox = QCheckBox("Показывать как рекомендуемый товар")
         self.description_input = QTextEdit()
         self.description_input.setMinimumHeight(120)
 
@@ -124,6 +140,10 @@ class ProductEditorDialog(QDialog):
         form.addRow("Цена", self.price_input)
         form.addRow("Единица измерения", self.price_unit_input)
         form.addRow("SKU", self.sku_input)
+        form.addRow("Статус публикации", self.published_state_combo)
+        form.addRow("Видимость в каталоге", self.visibility_combo)
+        form.addRow("Наличие", self.stock_status_combo)
+        form.addRow("Рекомендуемый товар", self.is_featured_checkbox)
         form.addRow("Описание", self.description_input)
         form.addRow(QLabel("Категории (чекбоксы)"), self.categories_list)
         form.addRow(QLabel("Изображения товара"), image_panel_widget)
@@ -151,6 +171,19 @@ class ProductEditorDialog(QDialog):
         self.price_input.setText(str(self._product_data.get("price", "")))
         self.price_unit_input.setText(str(self._product_data.get("price_unit", "")))
         self.sku_input.setText(str(self._product_data.get("sku", "")))
+        self._set_combo_by_data(
+            self.published_state_combo,
+            str(self._product_data.get("published_state") or self._product_data.get("status") or "draft"),
+        )
+        self._set_combo_by_data(
+            self.visibility_combo,
+            str(self._product_data.get("visibility") or "visible"),
+        )
+        self._set_combo_by_data(
+            self.stock_status_combo,
+            str(self._product_data.get("stock_status") or "instock"),
+        )
+        self.is_featured_checkbox.setChecked(bool(self._product_data.get("is_featured")))
 
         selected_category_ids = {int(value) for value in self._product_data.get("category_ids", [])}
         for row in range(self.categories_list.count()):
@@ -169,6 +202,10 @@ class ProductEditorDialog(QDialog):
             font.setPointSize(9)
         font.setBold(bold)
         item.setFont(font)
+
+    def _set_combo_by_data(self, combo: QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _reload_images(self) -> None:
         selected_key = None
@@ -483,6 +520,10 @@ class ProductEditorDialog(QDialog):
             "price": price or None,
             "price_unit": self.price_unit_input.text().strip() or None,
             "sku": self.sku_input.text().strip() or None,
+            "published_state": str(self.published_state_combo.currentData() or "draft"),
+            "visibility": str(self.visibility_combo.currentData() or "visible"),
+            "stock_status": str(self.stock_status_combo.currentData() or "instock"),
+            "is_featured": self.is_featured_checkbox.isChecked(),
             "category_ids": category_ids,
             "pending_local_images": deepcopy(self._pending_local_images),
         }

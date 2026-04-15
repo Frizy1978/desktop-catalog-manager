@@ -81,6 +81,9 @@ class Product(Base):
     visibility: Mapped[str] = mapped_column(
         String(64), nullable=False, default="visible"
     )
+    stock_status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="instock"
+    )
     published_state: Mapped[str] = mapped_column(
         String(64), nullable=False, default="draft"
     )

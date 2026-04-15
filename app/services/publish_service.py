@@ -434,6 +434,8 @@ class WooCommercePublishService:
             "short_description": str(row.get("short_description") or "").strip(),
             "status": self._normalize_wc_status(str(row.get("published_state") or "draft")),
             "catalog_visibility": str(row.get("visibility") or "visible"),
+            "featured": bool(row.get("is_featured")),
+            "stock_status": self._normalize_wc_stock_status(row.get("stock_status")),
             "categories": [{"id": category_id} for category_id in category_wc_ids],
         }
 
@@ -528,6 +530,12 @@ class WooCommercePublishService:
         if normalized == "published":
             return "publish"
         return "draft"
+
+    def _normalize_wc_stock_status(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"instock", "outofstock", "onbackorder"}:
+            return normalized
+        return "instock"
 
     def _decimal_to_price_string(self, value: Any) -> str:
         if value is None:

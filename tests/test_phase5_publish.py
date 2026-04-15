@@ -109,7 +109,8 @@ def test_publish_service_can_publish_selected_scope_only(tmp_path: Path) -> None
             sync_status="modified_local",
             published_state="draft",
             visibility="visible",
-            is_featured=False,
+            is_featured=True,
+            stock_status="outofstock",
             is_archived=False,
             price=Decimal("100.00"),
             regular_price=Decimal("100.00"),
@@ -170,6 +171,8 @@ def test_publish_service_can_publish_selected_scope_only(tmp_path: Path) -> None
     assert result.counters["products_total"] == 1
     assert len(fake_client.created_categories) == 1
     assert len(fake_client.created_products) == 1
+    assert fake_client.created_products[0]["featured"] is True
+    assert fake_client.created_products[0]["stock_status"] == "outofstock"
     assert fake_client.updated_categories == []
     assert fake_client.updated_products == []
 

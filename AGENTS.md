@@ -7,6 +7,7 @@ Fish Olha Desktop Catalog Manager v1
 Always follow:
 - `fisholha_desktop_catalog_manager_tz_for_codex.md`
 - `desktop_catalog_manager_phase1_foundation_for_codex.md`
+- `docs/phase_bdd_success_criteria.md`
 - later phase briefs if present
 
 ## Current priority
@@ -144,6 +145,7 @@ Dialogs / side panels / popup editors are allowed for:
 - Avoid giant one-shot implementation
 - Keep docs updated
 - Keep assumptions explicit
+- Assistant communication with the user must be only in Russian
 
 ---
 
@@ -160,6 +162,13 @@ Always provide:
 2. what was implemented
 3. open issues / assumptions
 4. what the next logical phase is
+5. how the user should verify the result manually
+
+## BDD success criteria
+- Approved phase success criteria are stored in `docs/phase_bdd_success_criteria.md`
+- Codex must use these BDD criteria as acceptance rules for future implementation
+- If current implementation does not fully satisfy an approved BDD criterion, Codex must treat the phase as still in progress
+- Deferred scope must not be silently included into phase success criteria
 
 ## WooCommerce / WordPress API split
 - Use WooCommerce Consumer Key / Secret only for wc/v3 categories/products

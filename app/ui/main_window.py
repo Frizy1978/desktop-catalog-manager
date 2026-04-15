@@ -28,6 +28,7 @@ from app.services.publish_service import (
 )
 from app.services.product_image_service import ProductImageService
 from app.services.sync_import_service import ImportRunResult, WooCommerceImportService
+from app.ui.dialogs.bulk_product_edit_dialog import BulkProductEditDialog
 from app.ui.dialogs.category_editor_dialog import CategoryEditorDialog
 from app.ui.dialogs.operation_log_dialog import OperationLogDialog
 from app.ui.dialogs.publish_changes_dialog import PublishChangesDialog
@@ -106,6 +107,11 @@ class MainWindow(QMainWindow):
         self._selected_category_id: int | None = None
         self._selected_product_id: int | None = None
         self._search_query = ""
+        self._sync_status_filter = ""
+        self._published_state_filter = ""
+        self._visibility_filter = ""
+        self._is_featured_filter = ""
+        self._stock_status_filter = ""
 
         self._import_thread: QThread | None = None
         self._import_worker: ImportWorker | None = None
@@ -146,6 +152,9 @@ class MainWindow(QMainWindow):
         self.products_table_panel.product_double_clicked.connect(
             self._on_product_double_clicked
         )
+        self.products_table_panel.select_filtered_requested.connect(
+            self._on_select_filtered_products_requested
+        )
 
         right_layout.addWidget(self.toolbar_panel)
         right_layout.addWidget(self.products_table_panel, stretch=1)
@@ -161,6 +170,7 @@ class MainWindow(QMainWindow):
 
         self.toolbar_panel.action_triggered.connect(self._handle_toolbar_action)
         self.toolbar_panel.search_changed.connect(self._on_search_changed)
+        self.toolbar_panel.filters_changed.connect(self._on_products_filters_changed)
         self.categories_panel.action_triggered.connect(self._handle_category_action)
         self.categories_panel.category_selected.connect(self._on_category_selected)
 
@@ -189,12 +199,17 @@ class MainWindow(QMainWindow):
         self._load_products_page()
 
     def _load_products_page(self) -> None:
-        effective_category_id = None if self._search_query else self._selected_category_id
+        effective_category_id = self._effective_products_category_id()
         page_data = self._catalog_service.get_products_table_page(
             page=self._products_page,
             page_size=self._products_page_size,
             category_id=effective_category_id,
             search_query=self._search_query,
+            sync_status_filter=self._sync_status_filter,
+            published_state_filter=self._published_state_filter,
+            visibility_filter=self._visibility_filter,
+            is_featured_filter=self._is_featured_filter,
+            stock_status_filter=self._stock_status_filter,
         )
         total_pages = int(page_data["total_pages"])
         if self._products_page > total_pages:
@@ -204,6 +219,11 @@ class MainWindow(QMainWindow):
                 page_size=self._products_page_size,
                 category_id=effective_category_id,
                 search_query=self._search_query,
+                sync_status_filter=self._sync_status_filter,
+                published_state_filter=self._published_state_filter,
+                visibility_filter=self._visibility_filter,
+                is_featured_filter=self._is_featured_filter,
+                stock_status_filter=self._stock_status_filter,
             )
 
         self.products_table_panel.populate_page(
@@ -213,6 +233,9 @@ class MainWindow(QMainWindow):
             total_items=int(page_data["total_items"]),
             total_pages=int(page_data["total_pages"]),
         )
+
+    def _effective_products_category_id(self) -> int | None:
+        return None if self._search_query else self._selected_category_id
 
     @Slot(int)
     def _on_products_page_changed(self, page: int) -> None:
@@ -238,6 +261,17 @@ class MainWindow(QMainWindow):
         self._load_products_page()
 
     @Slot(object)
+    def _on_products_filters_changed(self, filters: object) -> None:
+        payload = filters if isinstance(filters, dict) else {}
+        self._sync_status_filter = str(payload.get("sync_status") or "").strip()
+        self._published_state_filter = str(payload.get("published_state") or "").strip()
+        self._visibility_filter = str(payload.get("visibility") or "").strip()
+        self._is_featured_filter = str(payload.get("is_featured") or "").strip()
+        self._stock_status_filter = str(payload.get("stock_status") or "").strip()
+        self._products_page = 1
+        self._load_products_page()
+
+    @Slot(object)
     def _on_product_selection_changed(self, product_id: object) -> None:
         self._selected_product_id = int(product_id) if product_id is not None else None
         if self._selected_product_id is None:
@@ -259,6 +293,19 @@ class MainWindow(QMainWindow):
         self._selected_product_id = product_id
         self._open_edit_product_dialog()
 
+    @Slot()
+    def _on_select_filtered_products_requested(self) -> None:
+        product_ids = self._catalog_service.get_products_table_selection_ids(
+            category_id=self._effective_products_category_id(),
+            search_query=self._search_query,
+            sync_status_filter=self._sync_status_filter,
+            published_state_filter=self._published_state_filter,
+            visibility_filter=self._visibility_filter,
+            is_featured_filter=self._is_featured_filter,
+            stock_status_filter=self._stock_status_filter,
+        )
+        self.products_table_panel.add_checked_products(product_ids)
+
     def _handle_toolbar_action(self, action_key: str) -> None:
         if action_key == "import_wc":
             self._handle_import_from_wc()
@@ -277,6 +324,9 @@ class MainWindow(QMainWindow):
             return
         if action_key == "delete_product":
             self._delete_selected_product()
+            return
+        if action_key == "bulk_actions":
+            self._open_bulk_actions_dialog()
             return
         if action_key == "settings":
             self._open_settings()
@@ -360,6 +410,10 @@ class MainWindow(QMainWindow):
             "price": result_data.get("price"),
             "price_unit": result_data.get("price_unit"),
             "sku": result_data.get("sku"),
+            "published_state": result_data.get("published_state"),
+            "visibility": result_data.get("visibility"),
+            "is_featured": bool(result_data.get("is_featured")),
+            "stock_status": result_data.get("stock_status"),
             "category_ids": result_data.get("category_ids", []),
             "image_urls": None,
         }
@@ -404,6 +458,119 @@ class MainWindow(QMainWindow):
         if not deleted:
             QMessageBox.warning(self, "Ошибка", "Товар не найден.")
             return
+        self._reload_catalog_view()
+
+    def _open_bulk_actions_dialog(self) -> None:
+        product_ids = self.products_table_panel.checked_product_ids()
+        if not product_ids:
+            QMessageBox.information(
+                self,
+                "Нет выбранных товаров",
+                "Отметьте хотя бы один товар в таблице для массового действия.",
+            )
+            return
+
+        dialog = BulkProductEditDialog(
+            selected_count=len(product_ids),
+            category_options=self._catalog_service.get_category_options(),
+            parent=self,
+        )
+        if dialog.exec() != dialog.DialogCode.Accepted or not dialog.result_data:
+            return
+
+        action = str(dialog.result_data.get("action") or "")
+        try:
+            if action == "set_price_unit":
+                changed_count = self._catalog_service.bulk_update_product_price_unit(
+                    product_ids=product_ids,
+                    price_unit=dialog.result_data.get("price_unit"),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Единица измерения цены обновлена у товаров: {changed_count}.",
+                )
+            elif action == "set_price":
+                changed_count = self._catalog_service.bulk_update_product_price(
+                    product_ids=product_ids,
+                    price=str(dialog.result_data.get("price") or ""),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Цена обновлена у товаров: {changed_count}.",
+                )
+            elif action == "replace_category":
+                changed_count = self._catalog_service.bulk_replace_product_category(
+                    product_ids=product_ids,
+                    category_id=int(dialog.result_data.get("category_id") or 0),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Категория заменена у товаров: {changed_count}.",
+                )
+            elif action == "set_published_state":
+                changed_count = self._catalog_service.bulk_update_product_published_state(
+                    product_ids=product_ids,
+                    published_state=str(dialog.result_data.get("published_state") or ""),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Статус публикации обновлён у товаров: {changed_count}.",
+                )
+            elif action == "set_visibility":
+                changed_count = self._catalog_service.bulk_update_product_visibility(
+                    product_ids=product_ids,
+                    visibility=str(dialog.result_data.get("visibility") or ""),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Видимость обновлена у товаров: {changed_count}.",
+                )
+            elif action == "set_featured":
+                changed_count = self._catalog_service.bulk_update_product_featured(
+                    product_ids=product_ids,
+                    is_featured=bool(dialog.result_data.get("is_featured")),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Признак рекомендуемого обновлён у товаров: {changed_count}.",
+                )
+            elif action == "set_stock_status":
+                changed_count = self._catalog_service.bulk_update_product_stock_status(
+                    product_ids=product_ids,
+                    stock_status=str(dialog.result_data.get("stock_status") or ""),
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовое изменение выполнено",
+                    f"Наличие обновлено у товаров: {changed_count}.",
+                )
+            elif action == "archive_products":
+                archived_count = self._catalog_service.bulk_archive_products(
+                    product_ids=product_ids
+                )
+                QMessageBox.information(
+                    self,
+                    "Массовая архивация выполнена",
+                    f"В архив перемещено товаров: {archived_count}.",
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Ошибка",
+                    "Выбрано неподдерживаемое массовое действие.",
+                )
+                return
+        except ValueError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+
+        self.products_table_panel.clear_checked_products()
         self._reload_catalog_view()
 
     def _open_settings(self) -> None:

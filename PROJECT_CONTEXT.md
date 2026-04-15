@@ -25,14 +25,25 @@ Completed:
   - publish selection counter updates correctly when row checkboxes change
   - selected product publish auto-includes required unpublished categories
   - selected category publish auto-includes required unpublished parent categories
+- Phase 6 bulk editing completed:
+  - checkbox-based multi-selection in the products table
+  - selection of the full filtered result set for bulk actions
+  - bulk actions for `price_unit`, `price`, `category`, `published_state`, `visibility`, `is_featured`, `stock_status`, and archive
+  - practical table filtering for bulk workflow
+  - local editing of WooCommerce-facing product state fields
+  - compact state visibility directly in the products table
 
 Important technical decision:
 - keep WooCommerce Consumer Key / Secret for `wc/v3` category/product operations
 - keep separate WordPress Application Password auth for `wp/v2/media` uploads
 - do not merge these auth flows
 
+Approved success criteria:
+- phase acceptance now follows `docs/phase_bdd_success_criteria.md`
+- phase review and implementation decisions should be checked against the approved BDD criteria before coding
+
 Next goal:
-- move to Phase 6 bulk editing
+- move to Phase 7 architecture foundation for deferred AI-ready provider abstraction
 - SEO work is deferred to a later phase
 - active SEO plugin confirmed: `Yoast SEO`
 
@@ -85,9 +96,9 @@ Preferred direction:
 
 ## Current phase
 
-**Ready for Phase 6 - Bulk editing**
+**Phase 6 - Bulk editing completed**
 
-## What Phase 5 completion means
+## What current phase means
 
 - pending changes screen exists
 - categories/products can be published selectively
@@ -96,6 +107,42 @@ Preferred direction:
 - publication still runs through the publish job / sync-run architecture
 - left category panel and right workspace can be resized more clearly by the user
 - publish selection safely resolves unpublished category dependencies before publish
+- toolbar uses a compact two-row desktop layout:
+  - primary commands on the first row
+  - search and filters on the second row
+  - secondary commands moved to overflow
+- product table supports checkbox-based mass selection for bulk operations
+- current filtered result set can be selected for bulk operations in one action
+- first bulk actions are available for selected products:
+  - mass change of `price_unit`
+  - mass change of price
+  - mass replacement of category
+  - mass change of `published_state`
+  - mass change of `visibility`
+  - mass change of `is_featured`
+  - mass change of `stock_status`
+  - mass archive
+- product editor now supports:
+  - `published_state`
+  - `visibility`
+  - `is_featured`
+  - `stock_status`
+- practical table filtering for bulk workflow is now supported through:
+  - text search
+  - category selection
+  - `sync_status` filter
+  - `published_state` filter
+  - `visibility` filter
+  - `is_featured` filter
+  - `stock_status` filter
+- products table now also shows compact WooCommerce-facing state columns:
+  - `visibility`
+  - `is_featured`
+  - `stock_status`
+
+Phase 6 acceptance status:
+- approved BDD criteria for `Phase 6` are satisfied on the current branch
+- deferred spreadsheet-like workflow and advanced table redesign remain out of scope and do not block phase completion
 
 ## What is explicitly out of scope right now
 
@@ -117,10 +164,15 @@ Codex should first:
 5. update docs when phase state changes
 6. implement only the approved next scoped task
 
+## Phase acceptance reference
+
+- Use `docs/phase_bdd_success_criteria.md` as the agreed acceptance baseline for completed and in-progress phases
+- Use `docs/phase_scope_review_2026-04-14.md` for current active scope and manual verification guidance
+
 ## Test environment status
 
 - local project venv is working again
 - verified manually:
   - `.\.venv\Scripts\python.exe --version` -> `Python 3.12.3`
-  - `.\.venv\Scripts\python.exe -m pytest -q` -> `5 passed`
+  - `.\.venv\Scripts\python.exe -m pytest -q` -> `11 passed`
 - if Codex tool session cannot see the refreshed Python installation, restart the Codex session before relying on automated checks
